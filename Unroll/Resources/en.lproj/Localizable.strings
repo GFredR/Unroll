@@ -1,0 +1,7 @@
+/* App 名称(窗口标题 / 菜单栏) */
+"app.name" = "Unroll";
+
+/* M0 占位页文案(M2 阅读器就绪后整组删除) */
+"placeholder.title" = "Unroll";
+"placeholder.subtitle" = "Archive comic reader — project skeleton (M0)";
+"placeholder.hint" = "Reading features arrive with M2. Supported formats: .cbz / .cbr / .cb7 / .cbt / .zip";

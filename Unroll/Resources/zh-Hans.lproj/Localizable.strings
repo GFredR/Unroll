@@ -1,0 +1,7 @@
+/* App 名称(窗口标题 / 菜单栏) */
+"app.name" = "开卷";
+
+/* M0 占位页文案(M2 阅读器就绪后整组删除) */
+"placeholder.title" = "开卷";
+"placeholder.subtitle" = "归档漫画看图器 —— 工程骨架(M0)";
+"placeholder.hint" = "阅读功能自 M2 起提供。支持格式:.cbz / .cbr / .cb7 / .cbt / .zip";

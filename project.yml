@@ -1,0 +1,178 @@
+# ============================================================================
+# 开卷 / Unroll · XcodeGen 工程描述 —— 全工程唯一真源
+# ----------------------------------------------------------------------------
+# · 改完本文件后运行 `Scripts/regen.sh`(内部执行 xcodegen generate)重新生成
+#   Unroll.xcodeproj 与 Unroll/Info.plist。两者均为生成物,不入库(.gitignore)。
+# · 顶层结构(设计文档 §4.1):
+#     Unroll/       App 壳 + Reader 功能模块 + Core 基础设施(SwiftUI / MVVM)
+#     ArchiveKit/   本地 SPM 包:CArchiveShim(C 桥接)+ ArchiveKit(纯逻辑,零 UI)
+# · 设计决策依据见 ../归档看图器-v1设计.md(§7.1 六项已拍板 + §7.3 两项待拍板)。
+# ============================================================================
+name: Unroll
+
+options:
+  bundleIdPrefix: com.gfredr.unroll
+  deploymentTarget:
+    macOS: "14.0"              # §7.1-2:最低 Sonoma(加密行为需在 14 上复测,见设计文档 §3.2 警示)
+  createIntermediateGroups: true
+
+# 本地 SPM 包(§4.1):归档读取与加密四态检测全在这一层,不含任何 UI 依赖,
+# 因此可脱离 App 独立单测(Unroll-Logic scheme / ArchiveKit 下 swift test)。
+packages:
+  ArchiveKit:
+    path: ArchiveKit
+
+settings:
+  base:
+    SWIFT_VERSION: "6.0"       # Swift 6 语言模式 = strict concurrency(§3.1)
+    MARKETING_VERSION: "1.0.0" # 版本号唯一来源,M4 的 build-app.sh 从这里读
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  # ---------------------------------------------------------------- App 壳 --
+  Unroll:
+    type: application
+    platform: macOS
+    sources:
+      - path: Unroll
+        # Info.plist 由下方 info: 段生成,不作为资源参与编译
+        excludes:
+          - "Info.plist"
+    dependencies:
+      # App 只依赖 ArchiveKit 的 Swift 接口,不直接 import CArchiveShim
+      # (AGENTS.md 七.4:依赖必须过抽象层,禁止全项目直接 import)
+      - package: ArchiveKit
+    info:
+      path: Unroll/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleInfoDictionaryVersion: "6.0"
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundlePackageType: APPL
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSPrincipalClass: NSApplication
+        LSApplicationCategoryType: public.app-category.graphics-design
+
+        # ---- 文件关联(设计文档 §3.3)----
+        # 四种漫画归档 Default 抢占默认打开权(本机实测这些扩展名目前无主);
+        # zip 只做 Alternate,绝不抢系统归档工具的默认关联。
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Comic Book ZIP Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default
+            LSItemContentTypes: [com.gfredr.unroll.cbz]
+          - CFBundleTypeName: Comic Book RAR Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default
+            LSItemContentTypes: [com.gfredr.unroll.cbr]
+          - CFBundleTypeName: Comic Book 7z Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default
+            LSItemContentTypes: [com.gfredr.unroll.cb7]
+          - CFBundleTypeName: Comic Book TAR Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Default            # tar 无加密语义,天然无 §5.9 的加密风险
+            LSItemContentTypes: [com.gfredr.unroll.cbt]
+          - CFBundleTypeName: ZIP Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate          # 只在 Open 面板支持,不抢默认
+            LSItemContentTypes: [public.zip-archive]
+
+        # ---- UTI 导出声明(§3.3):conformsTo public.data + public.archive ----
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: com.gfredr.unroll.cbz
+            UTTypeDescription: Comic Book ZIP Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbz]
+          - UTTypeIdentifier: com.gfredr.unroll.cbr
+            UTTypeDescription: Comic Book RAR Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbr]
+          - UTTypeIdentifier: com.gfredr.unroll.cb7
+            UTTypeDescription: Comic Book 7z Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cb7]
+          - UTTypeIdentifier: com.gfredr.unroll.cbt
+            UTTypeDescription: Comic Book TAR Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbt]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gfredr.unroll
+        CODE_SIGN_ENTITLEMENTS: Unroll/Unroll.entitlements   # 沙盒开启(§0 决策 13)
+        ENABLE_HARDENED_RUNTIME: YES    # 公证(M4 分发)的前置要求
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+    scheme:
+      testTargets:
+        - UnrollTests
+        # 主 scheme ⌘U 一键跑全部测试:App 层 + 逻辑层 + 包内 C 桥接冒烟
+        - UnrollLogicTests
+        - package: ArchiveKit/ArchiveKitTests
+      run:
+        environmentVariables:
+          # 压掉系统 os_log 噪音(nw_* 等);业务 print / Logger 不受影响(DLNACast 同款惯例)
+          OS_ACTIVITY_MODE: disable
+
+  # ------------------------------------------------------------ App 单测 --
+  # 宿主为 App 的单元测试:覆盖 App 层(L10n / DesignSystem / ViewModel 状态机等)。
+  UnrollTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnrollTests
+    dependencies:
+      - target: Unroll          # 宿主为 App,可 @testable import Unroll
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+  # ---------------------------------------------------------- 逻辑快车道 --
+  # 无宿主单测:只链接 ArchiveKit 包,不构建不启动 App —— 秒级反馈。
+  # 归属:ArchiveKit 公开 API 的形状/契约测试(M1 起含加密 fixture 行为测试)。
+  # (C 桥接层的冒烟测试留在包内 Tests/,因为只有包内能 import CArchiveShim)
+  UnrollLogicTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnrollLogicTests
+    dependencies:
+      - package: ArchiveKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
+# ---------------------------------------------------------------------------
+# 附加 scheme。主 scheme「Unroll」已挂在 target 上(Run + Test + Archive);
+# 这里按「快/慢分离」原则再补两个:
+#   · Unroll-Logic      —— 只跑 ArchiveKit 纯逻辑单测,不构建 App,毫秒级反馈
+#   · Unroll-Distribution —— Release 归档通道,M4 接 build-app.sh / make-dmg.sh
+# ---------------------------------------------------------------------------
+schemes:
+  # 快车道:项目级逻辑测试 + 包内 C 冒烟,全部不碰 App —— 秒级反馈
+  # (XcodeGen 限制:scheme 的 build targets 只能引用项目 target,
+  #  所以包内测试挂在 test targets 里,构建目标用 UnrollLogicTests 兜底)
+  Unroll-Logic:
+    build:
+      targets:
+        UnrollLogicTests: all
+    test:
+      config: Debug
+      targets:
+        - UnrollLogicTests
+        # XcodeGen 语法:package: {本地包名}/{包内测试target名}
+        - package: ArchiveKit/ArchiveKitTests
+
+  Unroll-Distribution:
+    build:
+      targets:
+        Unroll: all
+    archive:
+      config: Release

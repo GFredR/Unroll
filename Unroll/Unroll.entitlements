@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 沙盒开启(设计文档 §0 决策 13 / §7.1-4):只读看图器,权限最小化 -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- 用户主动选择(打开面板/拖拽/Finder 双击)的文件:只读,不写 —— 看图器不需要写权限 -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    <!-- 「最近打开」需要应用域 security-scoped bookmark 持久化访问权(Core/RecentDocuments) -->
+    <key>com.apple.security.files.bookmarks.app-scope</key>
+    <true/>
+    <!-- 注意:无网络权限 —— 本产品零后端、零遥测,上报也是用户手动复制 issue 草稿 -->
+</dict>
+</plist>

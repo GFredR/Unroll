@@ -1,0 +1,21 @@
+# Xcode
+DerivedData/
+.build_data/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# xcodegen 生成物:project.yml 才是唯一真源,改完配置跑 Scripts/regen.sh
+*.xcodeproj/
+Unroll/Info.plist
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# macOS
+.DS_Store
+
+# 临时
+*.orig
+*.rej

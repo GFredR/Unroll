@@ -1,0 +1,12 @@
+// CArchiveShim 模块定义(设计文档 §3.2 方案 B)
+// ----------------------------------------------------------------------------
+// · header "shim.h"   —— Swift 侧 import CArchiveShim 时读到的唯一头文件
+// · link  "archive"   —— import 本模块的 target 链接期自动加 -larchive;
+//                        SDK(MacOSX.sdk/usr/lib/)内含 libarchive.tbd,已实测可解析
+// · [system]          —— 标记为系统库:clang 不对其做告警/诊断,防止手写原型
+//                        的轻微差异(如缺少 attrs)刷屏
+module CArchiveShim [system] {
+    header "shim.h"
+    link "archive"
+    export *
+}
