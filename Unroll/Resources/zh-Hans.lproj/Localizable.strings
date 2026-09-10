@@ -1,7 +1,53 @@
 /* App 名称(窗口标题 / 菜单栏) */
 "app.name" = "开卷";
 
-/* M0 占位页文案(M2 阅读器就绪后整组删除) */
-"placeholder.title" = "开卷";
-"placeholder.subtitle" = "归档漫画看图器 —— 工程骨架(M0)";
-"placeholder.hint" = "阅读功能自 M2 起提供。支持格式:.cbz / .cbr / .cb7 / .cbt / .zip";
+/* ============ M2:阅读器 ============ */
+
+/* 空态(拖入提示) */
+"reader.empty.title" = "开卷";
+"reader.empty.hint" = "把 .cbz / .cbr / .cb7 / .cbt 文件拖进窗口,\n或在访达中双击打开。";
+
+/* 打开中 */
+"reader.opening" = "正在打开…";
+
+/* 页码指示(画布右下角;M3 的 HUD 会替代) */
+"reader.page.progress" = "%ld / %ld";
+
+/* ---- 归档级错误(§5.9.3.1 八组,M3 做最终润色) ---- */
+
+/* #1 ZIP 全部加密 */
+"archive.encrypted.title" = "此归档已加密";
+"archive.encrypted.zip.body" = "这个压缩包里的文件都需要密码才能读取。\n当前版本暂不支持输入密码。";
+
+/* #2 7z 内容加密(实测:系统库不支持,如实说) */
+"archive.encrypted.7z.title" = "无法读取加密的 7z 内容";
+"archive.encrypted.7z.body" = "系统自带的解压库不支持解密 7z 内容,即使有正确密码也读不出来。\n请改用未加密的压缩包,或先用其他工具解压。";
+
+/* #3 RAR 内容加密(⚠️ 未实测,暂按「系统库不支持」撰写,§5.8) */
+"archive.encrypted.rar.title" = "无法读取加密的 RAR 内容";
+"archive.encrypted.rar.body" = "系统自带的解压库不支持解密 RAR 内容。\n请改用未加密的压缩包,或先用其他工具解压。";
+
+/* #4 头部加密 */
+"archive.encrypted.header.title" = "无法读取这个归档";
+"archive.encrypted.header.body" = "这个压缩包的文件名列表本身也被加密了,程序无法得知里面有哪些内容。";
+
+/* #5 部分加密 · 页级占位卡片 */
+"archive.page.encrypted.title" = "此页已加密";
+"archive.page.encrypted.subtitle" = "其余 %ld 页可正常阅读";
+
+/* #6 损坏 / 非归档 */
+"archive.corrupted.title" = "无法打开这个文件";
+"archive.corrupted.body" = "文件可能已损坏,或不是支持的格式(cbz / cbr / cb7 / cbt / zip)。";
+
+/* #7 无图片 */
+"archive.noImages.title" = "归档内没有找到图片";
+"archive.noImages.body" = "已读取 %ld 个条目,但没有一个是图片格式。";
+
+/* #8 错误态通用按钮 */
+"archive.error.chooseAnother" = "打开其他文件…";
+
+/* ---- M2 补充(§5.9.3.1 未定义的最小组,M3 一并润色) ---- */
+"archive.empty.title" = "归档里没有内容";
+"archive.empty.body" = "这个压缩包里没有包含任何文件。";
+"archive.page.failed.title" = "这一页读取失败";
+"archive.page.failed.body" = "文件可能部分损坏,其余页面不受影响。";

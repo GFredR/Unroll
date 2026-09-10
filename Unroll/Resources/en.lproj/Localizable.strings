@@ -1,7 +1,53 @@
 /* App 名称(窗口标题 / 菜单栏) */
 "app.name" = "Unroll";
 
-/* M0 占位页文案(M2 阅读器就绪后整组删除) */
-"placeholder.title" = "Unroll";
-"placeholder.subtitle" = "Archive comic reader — project skeleton (M0)";
-"placeholder.hint" = "Reading features arrive with M2. Supported formats: .cbz / .cbr / .cb7 / .cbt / .zip";
+/* ============ M2:Reader ============ */
+
+/* Empty state (drop hint) */
+"reader.empty.title" = "Unroll";
+"reader.empty.hint" = "Drop a .cbz / .cbr / .cb7 / .cbt file into this window,\nor double-click it in Finder.";
+
+/* Opening */
+"reader.opening" = "Opening…";
+
+/* Page indicator (canvas corner; replaced by M3 HUD) */
+"reader.page.progress" = "%ld / %ld";
+
+/* ---- Archive-level errors (§5.9.3.1; final polish in M3) ---- */
+
+/* #1 Fully encrypted ZIP */
+"archive.encrypted.title" = "This archive is encrypted";
+"archive.encrypted.zip.body" = "The files in this archive all require a password.\nEntering a password isn't supported in this version.";
+
+/* #2 Encrypted 7z content (verified: system library limitation — say it honestly) */
+"archive.encrypted.7z.title" = "Can't read encrypted 7z content";
+"archive.encrypted.7z.body" = "The system decompression library can't decrypt 7z content, even with the correct password.\nPlease use an unencrypted archive, or extract it with another tool first.";
+
+/* #3 Encrypted RAR content (⚠️ unverified; wording tentative, §5.8) */
+"archive.encrypted.rar.title" = "Can't read encrypted RAR content";
+"archive.encrypted.rar.body" = "The system decompression library can't decrypt RAR content.\nPlease use an unencrypted archive, or extract it with another tool first.";
+
+/* #4 Header encrypted */
+"archive.encrypted.header.title" = "Can't read this archive";
+"archive.encrypted.header.body" = "The file list inside this archive is also encrypted, so there's no way to tell what it contains.";
+
+/* #5 Partially encrypted · per-page placeholder card */
+"archive.page.encrypted.title" = "This page is encrypted";
+"archive.page.encrypted.subtitle" = "%ld other pages can be read normally";
+
+/* #6 Corrupted / not an archive */
+"archive.corrupted.title" = "Can't open this file";
+"archive.corrupted.body" = "This file may be corrupted, or isn't a supported format (cbz / cbr / cb7 / cbt / zip).";
+
+/* #7 No images */
+"archive.noImages.title" = "No images found in this archive";
+"archive.noImages.body" = "Read %ld entries, but none of them is an image.";
+
+/* #8 Error-state button */
+"archive.error.chooseAnother" = "Choose Another File…";
+
+/* ---- M2 extras (not in §5.9.3.1; polish in M3) ---- */
+"archive.empty.title" = "This archive is empty";
+"archive.empty.body" = "This archive doesn't contain any files.";
+"archive.page.failed.title" = "This page failed to load";
+"archive.page.failed.body" = "The file may be partially damaged. Other pages are not affected.";

@@ -34,14 +34,17 @@ public final class ArchiveDocument: Sendable {
     /// libarchive 识别的归档格式(错误文案分流依据,§5.9.3 图 10 FMT 分支)
     public let format: ArchiveFormat
 
-    /// 归档源文件;data(at:) 每次重新打开它(文件被移走/删除 → 抛 .corrupted)
-    private let url: URL
+    /// 归档源文件;data(at:) 每次重新打开它(文件被移走/删除 → 抛 .corrupted)。
+    /// internal(非 private):SequentialPageReader 复用同一打开逻辑(§5.1 顺序扫描器)
+    let url: URL
 
-    /// entries[i] 对应的原始条目序号(next_header 遍历顺序)
-    private let rawPositions: [Int]
+    /// entries[i] 对应的原始条目序号(next_header 遍历顺序)。
+    /// internal:SequentialPageReader 靠它做前向推进定位
+    let rawPositions: [Int]
 
-    /// entries[i] 是否加密(open 扫描时记录,读页时免二次探测)
-    private let entryEncrypted: [Bool]
+    /// entries[i] 是否加密(open 扫描时记录,读页时免二次探测)。
+    /// internal:SequentialPageReader 前置拦截加密页,不消耗流位置
+    let entryEncrypted: [Bool]
 
     private init(url: URL, entries: [ArchiveEntry], protection: ArchiveProtection,
                  format: ArchiveFormat, rawPositions: [Int], entryEncrypted: [Bool]) {
@@ -173,8 +176,9 @@ public final class ArchiveDocument: Sendable {
         return try readCurrentEntryData(a)
     }
 
-    /// 读当前 header 指向条目的全部数据(带迭代上限,§5.9.4 约束 5)
-    private func readCurrentEntryData(_ a: OpaquePointer) throws -> Data {
+    /// 读当前 header 指向条目的全部数据(带迭代上限,§5.9.4 约束 5)。
+    /// internal:SequentialPageReader 的前向读取复用同一实现(单一真源,防两处分叉)
+    func readCurrentEntryData(_ a: OpaquePointer) throws -> Data {
         var out = Data()
         var blocks = 0
         while blocks < C.maxDataBlocks {
@@ -201,7 +205,8 @@ public final class ArchiveDocument: Sendable {
 
     /// 新建读取句柄:filter/format 全开 + 按 §3.2 显式注册 rar/7zip。
     /// 打不开(文件不存在/无权限)→ .corrupted,文案对应「无法打开这个文件」。
-    private static func openRawHandle(url: URL) throws -> OpaquePointer {
+    /// internal:SequentialPageReader 重开实例(后向跳页)复用同一逻辑
+    static func openRawHandle(url: URL) throws -> OpaquePointer {
         guard let a = archive_read_new() else {
             throw ArchiveError.unknown(code: 0, message: "archive_read_new returned NULL")
         }
@@ -230,7 +235,7 @@ public final class ArchiveDocument: Sendable {
     }
 
     /// 关闭并释放(幂等;archive_read_close 对未打开句柄也安全返回)
-    private static func dispose(_ a: OpaquePointer) {
+    static func dispose(_ a: OpaquePointer) {
         archive_read_close(a)
         archive_read_free(a)
     }
@@ -252,8 +257,20 @@ public final class ArchiveDocument: Sendable {
         return .corrupted
     }
 
-    /// 全部图片加密时按格式分错(zip 理论可解 / 7z·rar 库不支持,§5.9.1)
-    private static func encryptionError(for format: ArchiveFormat) -> ArchiveError {
+    /// 全部图片加密时按格式分流错误类型。
+    ///
+    /// ⚠️ **勿把 `.rar` 与 `.sevenZip` 等同看待 —— 两者证据强度完全不同:**
+    /// - `.sevenZip`:**实测确认**库不支持。libarchive 3.7.4 报错原文本就是
+    ///   `currently not supported`,有正确密码也读不出(§5.9.1,2026-09-09 实测)。
+    /// - `.rar`:**未实测**,此处只是保守推断。官方 README 写 "RAR and RAR 5.0",
+    ///   WASM 移植(libarchivejs)提供 `usePassword()` 且标注支持 RAR v4/v5 →
+    ///   **RAR5 加密很可能实际可解**。若属实,则本分支对 RAR 是「过早放弃」。
+    ///
+    /// v1 不做密码框(§7.3-A),所以二者当前 UI 结果一致,**但文案依据不同**:
+    /// 7z 可如实说「系统库不支持」,RAR 只能说「当前版本暂不支持」。
+    /// 拿到加密 RAR 样本后必须复测并据实改写(设计文档 §5.8、§5.9.3.1 注 3)。
+    /// internal:SequentialPageReader 加密页前置拦截复用同一分流(§5.9.3 图 10 FMT 分支)
+    static func encryptionError(for format: ArchiveFormat) -> ArchiveError {
         switch format {
         case .zip: return .encrypted
         case .sevenZip, .rar: return .encryptedUnsupportedFormat
@@ -287,8 +304,16 @@ public final class ArchiveDocument: Sendable {
 /// 加密文案分流的依据:zip / 7z / rar 各对应 §5.9.3.1 不同文案组。
 public enum ArchiveFormat: Sendable, Equatable {
     case zip          // .cbz / .zip —— 加密时「理论可解,v1 无密码框」
-    case sevenZip     // .cb7 / .7z  —— 加密时库不支持(实测,§5.9.1)
-    case rar          // .cbr / .rar —— 加密时按「库不支持」暂定(§5.8 未实测)
+    case sevenZip     // .cb7 / .7z  —— 加密时库不支持(**实测确认**,§5.9.1)
+    /// .cbr / .rar
+    /// ✅ **明文读取已实测通过**(2026-09-10):5 个真实 RAR5 样本(1 / 444 / 568 条目)
+    ///    format 识别、protection=none 判定、data(at:) 取字节全部正确。
+    /// ⚠️ 仍无样本:RAR4(老格式)、加密 RAR。
+    /// ⚠️ 加密分支当前归入 encryptedUnsupportedFormat,但那是**保守推断,不是实测结论** ——
+    ///    libarchive 官方 README 与 WASM 移植(libarchivejs 的 usePassword)均提示 RAR5
+    ///    支持密码解密,与 sevenZip 的「实测确认不支持」证据强度**完全不同**,勿等同看待。
+    ///    拿到加密样本后必须复测,见设计文档 §5.8。
+    case rar
     case tar          // .cbt / .tar —— 无加密语义
     case other(name: String)
 
@@ -308,8 +333,9 @@ public enum ArchiveFormat: Sendable, Equatable {
 
 // MARK: - libarchive 常量(archive.h 定义,不透明 shim 不含头文件,此处收编)
 
-/// libarchive 通用返回码(§5.9 shim 铁律 3:只判断这五个)
-private enum C {
+/// libarchive 通用返回码(§5.9 shim 铁律 3:只判断这五个)。
+/// internal(非 private):SequentialPageReader 跨文件复用,单一真源防两处漂移
+enum C {
     static let OK: Int32 = 0
     static let EOF: Int32 = 1
     static let WARN: Int32 = -20
