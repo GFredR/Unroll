@@ -71,13 +71,13 @@ final class ArchiveKitContractTests: XCTestCase {
         XCTAssertEqual(errors.count, 7, "M0 锁定的错误 case 总数,加 case 请连测试一起改")
     }
 
-    // MARK: - NaturalSort(M0 占位行为,如实锁定)
+    // MARK: - NaturalSort(M1 真实现)
 
-    func testNaturalSortPlaceholderIsLexicographic() {
-        // ⚠️ 本测试锁定的是 M0 占位行为(字典序),不是最终需求!
-        // page10 < page2 在字典序下成立、在自然排序下不成立。
-        // M1 实现真正的自然排序后,本测试必须反转断言并改名
-        // (TODO(M1): 见 NaturalSort.swift 头注释的 4 组用例)。
-        XCTAssertTrue(NaturalSort.less("page10", "page2"))
+    func testNaturalSortSortsPagesNumerically() {
+        // M1 已实现真自然排序(数字段切分 + 前导零破平局)。
+        // M0 曾按占位行为断言字典序(page10 < page2),本测试随实现反转。
+        // 包内 NaturalSortTests 有完整四组用例;此处只锁跨包可见的 API 行为。
+        XCTAssertTrue(NaturalSort.less("page2", "page10"))
+        XCTAssertFalse(NaturalSort.less("page10", "page2"))
     }
 }

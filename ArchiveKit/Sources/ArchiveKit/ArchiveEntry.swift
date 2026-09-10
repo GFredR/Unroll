@@ -10,7 +10,8 @@ public struct ArchiveEntry: Sendable, Equatable {
     /// 条目在归档内的相对路径,如 "vol01/p002.jpg"
     public let path: String
 
-    /// 在归档内的序号(next_header 遍历顺序,0 起)
+    /// 在 entries(自然排序后的图片列表)中的位置,0 起;data(at:) 以它定位。
+    /// 原始遍历序号是 ArchiveDocument 内部实现细节(rawPositions),不外露
     public let index: Int
 
     /// 未压缩数据大小(字节);头部加密等场景可能拿不到 → nil 更诚实

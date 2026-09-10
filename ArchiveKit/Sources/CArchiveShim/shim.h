@@ -66,6 +66,11 @@ int archive_entry_is_encrypted(struct archive_entry *);         /* 四态检测�
 const char *archive_error_string(struct archive *);
 const char *archive_version_string(void);
 
+/* 格式名(如 "Zip" / "7-Zip" / "RAR5"):首次 next_header 成功后有效。
+ * 加密四态中「全部加密」按格式分文案(§5.9.3 图 10 FMT 分支):
+ * zip → 理论可解但 v1 无密码框;7z/rar → 库层面不支持。 */
+const char *archive_format_name(struct archive *);
+
 #ifdef __cplusplus
 }
 #endif
