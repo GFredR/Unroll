@@ -11,6 +11,8 @@ A lightweight, native macOS comic archive reader. Double-click `.cbz / .cbr / .c
 - 技术栈:SwiftUI · Swift 6(strict concurrency)· 系统自带 libarchive(零第三方依赖)
 - 最低系统:macOS 14 Sonoma
 - 许可:MIT
+- 格式验证:zip / 7z / tar 与 **RAR5 明文**已实测通过(5 个真实样本,1 / 444 / 568 条目);
+  RAR4 与加密归档仍无样本,当前按保守推断处理(见设计文档 §5.8)
 
 ## 开发
 
