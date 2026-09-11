@@ -51,3 +51,18 @@
 "archive.empty.body" = "This archive doesn't contain any files.";
 "archive.page.failed.title" = "This page failed to load";
 "archive.page.failed.body" = "The file may be partially damaged. Other pages are not affected.";
+
+/* ============ M3: Menus / Reading Modes ============ */
+
+/* File menu */
+"app.menu.open" = "Open…";
+"app.menu.openRecent" = "Open Recent";
+"app.menu.clearRecent" = "Clear Menu";
+
+/* View menu */
+"app.menu.view" = "View";
+"reader.layout.single" = "Single Page";
+"reader.layout.dual" = "Two Pages";
+"reader.direction.ltr" = "Left to Right";
+"reader.direction.rtl" = "Right to Left (Manga)";
+"app.menu.firstPage" = "Back to Cover";

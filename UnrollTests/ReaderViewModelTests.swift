@@ -73,4 +73,58 @@ final class ReaderViewModelTests: XCTestCase {
         }
         XCTAssertEqual(vm.pageIndex, 0)
     }
+
+    // MARK: - 双页 / 右开(M3,§0 决策 3)
+
+    private static let fixturesDir = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("ArchiveKit/Tests/Fixtures")
+
+    /// fixture 不可达 → skip(同 PageStoreTests 的沙盒约定)
+    private func openFixtureOrSkip() async throws -> ReaderViewModel {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        let vm = ReaderViewModel()
+        await vm.open(url: url).value
+        guard case .reading = vm.phase, vm.pageCount >= 2 else {
+            throw XCTSkip("fixture 未进入 reading 态或页数不足(plain.cbz 有 3 页)")
+        }
+        return vm
+    }
+
+    /// 双页:次页 = 主页 +1;翻页步长 ×2;尾页越界 → 次页 nil
+    func testDualModeStepAndSecondaryIndex() async throws {
+        let vm = try await openFixtureOrSkip()
+        let count = vm.pageCount
+        vm.layout = .dual
+
+        XCTAssertEqual(vm.secondaryIndex, 1)
+        vm.nextPage()
+        XCTAssertEqual(vm.pageIndex, min(2, count - 1), "双页模式一次跨两页")
+
+        // 连翻到尾:最后一页无次页 → nil,退化为单页
+        vm.goTo(count - 1)
+        XCTAssertNil(vm.secondaryIndex)
+    }
+
+    /// 单页:次页恒 nil,步长 1
+    func testSingleModeHasNoSecondary() async throws {
+        let vm = try await openFixtureOrSkip()
+        XCTAssertNil(vm.secondaryIndex)
+        vm.nextPage()
+        XCTAssertEqual(vm.pageIndex, 1, "单页模式步长 1")
+    }
+
+    /// 右开:只影响视觉顺序(归 View),VM 的翻页语义恒为「文档前进/后退」;
+    /// 切方向不动当前页
+    func testDirectionSwitchKeepsPositionAndForwardStep() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.direction = .rightToLeft
+        XCTAssertEqual(vm.pageIndex, 0, "切方向不得跳页")
+        vm.nextPage()
+        XCTAssertEqual(vm.pageIndex, 1, "前进语义与方向无关,恒 +1(文档序)")
+    }
 }

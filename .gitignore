@@ -19,3 +19,8 @@ Unroll/Info.plist
 # 临时
 *.orig
 *.rej
+
+# 手工验收样本与工具编译产物(2026-09-11:样本由 Scripts/gen_big_sample.swift 现造)
+TestSamples/
+Scripts/gen_big_sample
+Scripts/bench_archive

@@ -39,11 +39,29 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 页级状态
 
+    /// 上屏页的次页(双页模式;nil = 单页 / 越界尾页)。独立于 PagePresentation:
+    /// 主图的「保留旧图防闪烁」语义不适用于次页(翻摊时次页直接换新)
+    @Published var secondary: CGImage?
+
     /// 当前页的上屏呈现:旧图垫底防闪烁 + 加载态 + 单页失败卡片
     struct PagePresentation: Equatable {
         var image: CGImage?        // 当前上屏图(新页就绪前是旧图或缩略图)
         var isLoading = false
         var failure: Failure?
+    }
+
+    // MARK: - 阅读模式(M3)
+
+    /// 单页 / 双页(§0 决策 3:双页可关)
+    enum PageLayout: String {
+        case single
+        case dual
+    }
+
+    /// 阅读方向:左开 / 日漫右开(右→左)
+    enum ReadingDirection: String {
+        case leftToRight
+        case rightToLeft
     }
 
     // MARK: - Published
@@ -52,6 +70,24 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var presentation = PagePresentation()
     @Published private(set) var pageIndex = 0
     @Published private(set) var pageCount = 0
+    /// HUD 显示用:仅文件名,绝不存完整路径(隐私红线同 §5.10.4)
+    @Published private(set) var documentName: String?
+    @Published var layout: PageLayout = .single {
+        didSet { guard oldValue != layout else { return } ; refreshSecondary() }
+    }
+    @Published var direction: ReadingDirection = .leftToRight {
+        didSet { guard oldValue != direction else { return } ; refreshSecondary() }
+    }
+
+    /// 双页模式下的次页下标(越界尾页 → nil,View 退化为单页)
+    var secondaryIndex: Int? {
+        guard layout == .dual else { return nil }
+        let next = pageIndex + 1
+        return next < pageCount ? next : nil
+    }
+
+    /// 翻页步长:双页一次跨两页
+    private var pageStep: Int { layout == .dual ? 2 : 1 }
 
     // MARK: - 私有
 
@@ -77,6 +113,8 @@ final class ReaderViewModel: ObservableObject {
         pageIndex = 0
         encryptedPageCount = 0
         presentation = PagePresentation()
+        secondary = nil
+        documentName = url.lastPathComponent
         let task = Task { await performOpen(url: url) }
         openTask = task
         return task
@@ -119,11 +157,28 @@ final class ReaderViewModel: ObservableObject {
         pageIndex = clamped
         presentation.failure = nil
         presentation.isLoading = true
+        secondary = nil   // 旧次页已失效,留白待新次页(不垫旧图,视觉上是「下一摊」)
         Task { await loadPage(clamped) }
     }
 
-    func nextPage() { goTo(pageIndex + 1) }
-    func previousPage() { goTo(pageIndex - 1) }
+    func nextPage() { goTo(pageIndex + pageStep) }
+    func previousPage() { goTo(pageIndex - pageStep) }
+
+    /// 布局/方向切换后,次页图立刻跟上(主图不动,无闪烁)
+    private func refreshSecondary() {
+        guard phase == .reading else { return }
+        if let idx = secondaryIndex {
+            Task { await loadSecondary(idx) }
+        } else {
+            secondary = nil
+        }
+    }
+
+    /// 次页加载(仅双页;失败静默 —— 次页失败不换主图,与「单页失败 ≠ 整档失败」一致)
+    private func loadSecondary(_ index: Int) async {
+        guard let store, index == secondaryIndex else { return }
+        secondary = try? await store.image(at: index)
+    }
 
     private func loadPage(_ index: Int) async {
         guard let store else { return }
@@ -142,6 +197,9 @@ final class ReaderViewModel: ObservableObject {
             presentation.isLoading = false
             presentation.failure = nil
             await store.anchorDidChange(to: index)
+            if let sec = secondaryIndex {
+                await loadSecondary(sec)
+            }
         } catch let error as ArchiveError {
             guard index == pageIndex, phase == .reading else { return }
             presentation.isLoading = false

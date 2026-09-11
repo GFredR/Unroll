@@ -51,3 +51,18 @@
 "archive.empty.body" = "这个压缩包里没有包含任何文件。";
 "archive.page.failed.title" = "这一页读取失败";
 "archive.page.failed.body" = "文件可能部分损坏,其余页面不受影响。";
+
+/* ============ M3:菜单命令 / 阅读模式 ============ */
+
+/* 文件菜单 */
+"app.menu.open" = "打开…";
+"app.menu.openRecent" = "打开最近";
+"app.menu.clearRecent" = "清除菜单";
+
+/* 视图菜单 */
+"app.menu.view" = "视图";
+"reader.layout.single" = "单页";
+"reader.layout.dual" = "双页";
+"reader.direction.ltr" = "从左往右读";
+"reader.direction.rtl" = "从右往左读(日漫)";
+"app.menu.firstPage" = "回到封面";
