@@ -1,5 +1,5 @@
 // AI-Generated | 可修改
-// ReaderViewModel —— 页面状态机(设计文档 §4.1 / §4.3 图 3,M2 实现)
+// ReaderViewModel —— 页面状态机(设计文档 §4.1 / §4.3 图 3,M2 实现;M4 加面包屑打点)
 // ----------------------------------------------------------------------------
 // 规范(AGENTS.md 三):@MainActor + ObservableObject,View 通过 @StateObject 监听;
 // 状态驱动 UI 切换,View 不含业务逻辑。
@@ -13,6 +13,10 @@
 //
 // 错误文案:VM 只产出 key + 参数(§5.9.3.1 的分组),渲染归 View(L10n.tr)。
 // archive_error_string() 原文永不进 UI(§5.9.4 约束 6,可能含完整路径)。
+//
+// M4 面包屑打点(§5.10.3-①):本文件是「用户动作」的观测点 ——
+//   打开 / 索引 / 翻页 / 布局切换。**只记动作与页索引,绝不记文件名**(§5.10.4);
+//   失败也只记错误码,不记 archive_error_string() 原文(可能含路径)。
 import ArchiveKit
 import CoreGraphics
 import Foundation
@@ -73,10 +77,18 @@ final class ReaderViewModel: ObservableObject {
     /// HUD 显示用:仅文件名,绝不存完整路径(隐私红线同 §5.10.4)
     @Published private(set) var documentName: String?
     @Published var layout: PageLayout = .single {
-        didSet { guard oldValue != layout else { return } ; refreshSecondary() }
+        didSet {
+            guard oldValue != layout else { return }
+            Breadcrumbs.shared.record(.layoutChanged(layout.rawValue))
+            refreshSecondary()
+        }
     }
     @Published var direction: ReadingDirection = .leftToRight {
-        didSet { guard oldValue != direction else { return } ; refreshSecondary() }
+        didSet {
+            guard oldValue != direction else { return }
+            Breadcrumbs.shared.record(.directionChanged(direction == .leftToRight ? "ltr" : "rtl"))
+            refreshSecondary()
+        }
     }
 
     /// 双页模式下的次页下标(越界尾页 → nil,View 退化为单页)
@@ -135,13 +147,23 @@ final class ReaderViewModel: ObservableObject {
             }
             phase = .reading
 
+            // 面包屑:格式 + 大小桶(不含文件名)/ 页数 / 加密页数(§5.10.4 允许字段)
+            Breadcrumbs.shared.record(.openArchive(format: Self.formatToken(document.format),
+                                                   sizeBucket: await sizeBucket(of: url)))
+            Breadcrumbs.shared.record(.indexBuilt(pages: document.entries.count))
+            if encryptedPageCount > 0 {
+                Breadcrumbs.shared.record(.encryptedPages(count: encryptedPageCount))
+            }
+
             await loadPage(0)
             await store.anchorDidChange(to: 0)
         } catch is CancellationError {
             // 被更新的 open 抢占:不做任何状态写入,别覆盖新任务的结果
         } catch let error as ArchiveError {
+            Breadcrumbs.shared.record(.openFailed(code: Self.failureCode(error)))
             phase = .failed(openFailure(for: error, url: url))
         } catch {
+            Breadcrumbs.shared.record(.openFailed(code: "unknown"))
             phase = .failed(openFailure(for: .corrupted, url: url))
         }
     }
@@ -196,6 +218,7 @@ final class ReaderViewModel: ObservableObject {
             presentation.image = image
             presentation.isLoading = false
             presentation.failure = nil
+            Breadcrumbs.shared.record(.pageDecode(index: index))
             await store.anchorDidChange(to: index)
             if let sec = secondaryIndex {
                 await loadSecondary(sec)
@@ -204,12 +227,50 @@ final class ReaderViewModel: ObservableObject {
             guard index == pageIndex, phase == .reading else { return }
             presentation.isLoading = false
             presentation.failure = pageFailure(for: error)
+            Breadcrumbs.shared.record(.pageFailed(index: index))
         } catch {
             // 解码层只抛 ArchiveError,这里是防御性兜底(例如取消)
             guard index == pageIndex, phase == .reading else { return }
             presentation.isLoading = false
             presentation.failure = pageFailure(for: .corrupted)
+            Breadcrumbs.shared.record(.pageFailed(index: index))
         }
+    }
+
+    // MARK: - 面包屑辅助(§5.10.4:只产「短标签」,绝不产路径 / 文件名)
+
+    /// libarchive 判定的格式 → 短标签(sanitize 白名单内)
+    private static func formatToken(_ format: ArchiveFormat) -> String {
+        switch format {
+        case .zip:      return "zip"
+        case .sevenZip: return "7z"
+        case .rar:      return "rar"
+        case .tar:      return "tar"
+        case .other:    return "other"
+        }
+    }
+
+    /// 归档错误 → 短码。**刻意不记 `archive_error_string()` 原文**
+    /// (§5.9.4 约束 6:那串英文可能含完整路径 —— 比设计文档 §5.9 的措辞更严一档)
+    private static func failureCode(_ error: ArchiveError) -> String {
+        switch error {
+        case .corrupted:                return "corrupted"
+        case .empty:                    return "empty"
+        case .noImages:                 return "noImages"
+        case .headerEncrypted:          return "headerEncrypted"
+        case .encrypted:                return "encrypted"
+        case .encryptedUnsupportedFormat: return "encryptedUnsupported"
+        case .unknown:                  return "unknown"
+        }
+    }
+
+    /// 文件大小 → 区间桶(§5.10.4:只记桶,绝不记精确大小,更不记路径)。
+    /// stat 放后台,不占主线程(AGENTS.md 十二.1)
+    private func sizeBucket(of url: URL) async -> String {
+        let bytes = await Task.detached(priority: .utility) {
+            (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+        }.value
+        return Breadcrumbs.sizeBucket(bytes: bytes)
     }
 
     // MARK: - 错误 → 文案 key(§5.9.3.1 分流)

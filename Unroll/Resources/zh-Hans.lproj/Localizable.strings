@@ -66,3 +66,11 @@
 "reader.direction.ltr" = "从左往右读";
 "reader.direction.rtl" = "从右往左读(日漫)";
 "app.menu.firstPage" = "回到封面";
+
+/* ============ M4:崩溃自愿上报(§5.10) ============ */
+
+/* 文案要软:不断言「崩溃了」—— 也可能是被强杀(§5.10.3-②) */
+"crash.prompt.title" = "上次似乎异常退出";
+"crash.prompt.body" = "上次运行时没能正常关闭。可以把当时的操作记录整理成一份报告发给我吗?\n\n报告里只有版本、系统、归档格式、页数和操作步骤 —— 不含文件名、路径或任何内容,提交前你可以先看一遍。";
+"crash.prompt.report" = "查看报告…";
+"crash.prompt.dismiss" = "不再询问";

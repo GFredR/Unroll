@@ -17,6 +17,12 @@ import Foundation
 
 final class PageCache {
 
+    /// 淘汰类型(对应图 6 的两个终态)
+    enum EvictionKind {
+        case demoted   // Trimmed:全分辨率降为缩略图
+        case evicted   // Evicted:条目彻底移除
+    }
+
     /// 预算(默认值全部来自 DesignSystem.PageBudget 单一真源;
     /// 可注入是为了单测能用小阈值验证淘汰逻辑 —— 真实预算 2 亿像素造不出来)
     struct Budget {
@@ -32,8 +38,14 @@ final class PageCache {
 
     private let budget: Budget
 
-    init(budget: Budget = .default) {
+    /// 淘汰回调 —— 崩溃面包屑的观测点(§5.10.3-① 示例轨迹里的 cacheEvict)。
+    /// **默认 nil**:单测里 PageCache 只关心预算与 LRU,不该顺手往诊断链路灌事件
+    private let onEviction: ((Int, EvictionKind) -> Void)?
+
+    init(budget: Budget = .default,
+         onEviction: ((Int, EvictionKind) -> Void)? = nil) {
         self.budget = budget
+        self.onEviction = onEviction
     }
 
     /// 单页条目。fullImage 为 nil 表示已降级(Trimmed),只剩缩略图
@@ -145,6 +157,7 @@ final class PageCache {
         entry.fullImage = nil
         entry.fullPixels = 0
         entries[page] = entry
+        onEviction?(page, .demoted)
     }
 
     /// 缩略图上限(budget.maxThumbnails):LRU 彻底释放
@@ -157,6 +170,7 @@ final class PageCache {
             entries[key]?.thumbnail = nil
             if entries[key]?.fullImage == nil {
                 entries.removeValue(forKey: key)   // Evicted:缩略图也没了,条目移除
+                onEviction?(key, .evicted)
             }
         }
     }

@@ -27,8 +27,15 @@ actor PageStore {
     /// 单实例顺序扫描器(§5.1 硬约束)。惰性创建:首个读请求才开 C 句柄
     private var scanner: SequentialPageReader?
 
-    /// 页缓存(LRU + 像素预算 + 缩略图降级)
-    private let cache = PageCache()
+    /// 页缓存(LRU + 像素预算 + 缩略图降级)。
+    /// 淘汰事件转成面包屑(M4 §5.10.3-① 示例轨迹里的 cacheEvict/cacheDemote);
+    /// 测试宿主内 Breadcrumbs 自动静默(UnrollRuntime),不会污染真实诊断文件
+    private let cache = PageCache(onEviction: { page, kind in
+        switch kind {
+        case .demoted: Breadcrumbs.shared.record(.cacheDemote(page: page))
+        case .evicted: Breadcrumbs.shared.record(.cacheEvict(page: page))
+        }
+    })
 
     /// 解码中的任务(按页去重:两个并发请求同一页只解码一次)
     private var inFlight: [Int: Task<CGImage, Error>] = [:]

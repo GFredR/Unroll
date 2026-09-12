@@ -8,6 +8,9 @@
 //     文件菜单(⌘O 打开 / 最近打开,security-scoped bookmark 重开,§5.7);
 //     视图菜单(单页/双页 ⌘1/⌘2,左开/右开 ⇧⌘L/⇧⌘R,回到封面)。
 //     全屏 HUD、滚轮翻页在 ReaderView / HUDView 内实现。
+// M4:崩溃采集 L0 的会话标记(SwiftUI 无 applicationWillTerminate 对应物,
+//     故用 NSApplicationDelegateAdaptor 接 AppKit 回调,见 AppLifecycle);
+//     窗口根视图挂 .crashPrompt() 做「上次似乎异常退出」延迟询问(§5.10)。
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -19,6 +22,9 @@ struct UnrollApp: App {
     /// 菜单展示的最近列表(open 后与菜单即将显示时刷新)
     @State private var recentList: [RecentDocuments.Entry] = []
 
+    /// M4:崩溃采集的会话标记要靠 AppKit 生命周期回调闭合
+    @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
+
     var body: some Scene {
         // 标题直接用 Localizable key,SwiftUI 会自动按系统语言解析(en / zh-Hans)
         WindowGroup("app.name") {
@@ -29,6 +35,8 @@ struct UnrollApp: App {
                     openArchive(url: url)
                 }
                 .onAppear { reloadRecents() }
+                // M4:启动 1.5s 后自检「上次是否异常退出」,是则问一次(§5.10.5-①)
+                .crashPrompt()
         }
         .windowStyle(.automatic)
         .commands {
@@ -104,6 +112,26 @@ struct UnrollApp: App {
 
     private func reloadRecents() {
         recentList = recents.entries()
+    }
+}
+
+// MARK: - App 生命周期钩子(M4 崩溃采集)
+
+/// SwiftUI 没有 `applicationWillTerminate` 的对应物,而「正常退出」的定义
+/// 恰恰就是这一刻 —— 崩溃采集的会话标记靠这两个回调闭合(§5.10.3-②):
+/// 启动写 `alive = true`,⌘Q / 关窗口写 `alive = false`。
+/// 崩溃时永远写不到 false,于是下次启动就能检出「上次异常退出」。
+@MainActor
+final class AppLifecycle: NSObject, NSApplicationDelegate {
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // 诊断模块自身失败一律静默(§5.10.5-②),绝不阻断启动
+        CrashReporter.shared.beginSession()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Breadcrumbs.shared.record(.appTerminated)
+        CrashReporter.shared.endSession()
     }
 }
 
