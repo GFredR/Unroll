@@ -124,6 +124,11 @@ if ! codesign -dv "$APP_DIR" 2>&1 | grep -q 'Developer ID'; then
 fi
 
 DMG_SIZE="$(du -h "$DIST_DIR/$DMG_NAME" | awk '{print $1}')"
+
+# 8. 校验和:无签名的发布,SHA256 是下载者唯一的完整性/防篡改凭据
+(cd "$DIST_DIR" && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
+
 echo ""
 echo "✓ 生成 $DIST_DIR/$DMG_NAME ($DMG_SIZE)"
+echo "  → SHA256: $DIST_DIR/$DMG_NAME.sha256"
 echo "  → open $DIST_DIR/$DMG_NAME"

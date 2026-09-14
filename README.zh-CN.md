@@ -1,5 +1,8 @@
 [English](README.md) | **简体中文**
 
+[![Tests](https://github.com/GFredR/Unroll/actions/workflows/test.yml/badge.svg)](https://github.com/GFredR/Unroll/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 # 开卷 / Unroll
 
 轻量的原生 **macOS 归档看图器**。双击 `.cbz / .cbr / .cb7 / .cbt` 文件直接开始阅读——不解压、不建库、退出无痕。**完全开源免费。**

@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  archivekit:
+    name: ArchiveKit (SPM)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run ArchiveKit tests
+        working-directory: ArchiveKit
+        run: swift test
+
+  app:
+    name: App (xcodegen + xcodebuild)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: ./Scripts/regen.sh
+      - name: Build & test (unsigned)
+        run: >
+          xcodebuild test
+          -project Unroll.xcodeproj
+          -scheme Unroll
+          -destination 'platform=macOS'
+          -derivedDataPath .build_data/ci
+          CODE_SIGNING_ALLOWED=NO

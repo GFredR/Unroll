@@ -1,5 +1,8 @@
 **English** | [简体中文](README.zh-CN.md)
 
+[![Tests](https://github.com/GFredR/Unroll/actions/workflows/test.yml/badge.svg)](https://github.com/GFredR/Unroll/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 # Unroll / 开卷
 
 A lightweight, native **macOS comic archive reader**. Double-click a `.cbz / .cbr / .cb7 / .cbt` file and start reading — no extraction, no library, no traces left behind. **Fully open source and free.**
