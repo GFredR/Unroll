@@ -68,6 +68,12 @@
 "reader.direction.rtl" = "Right to Left (Manga)";
 "app.menu.firstPage" = "Back to Cover";
 
+/* Fit modes (⌘3-⌘6) */
+"reader.fit.window" = "Fit Window";
+"reader.fit.width" = "Fit Width";
+"reader.fit.height" = "Fit Height";
+"reader.fit.actual" = "Actual Size (1:1)";
+
 /* ============ M4: Voluntary crash report (§5.10) ============ */
 
 /* Wording stays soft: never claim "it crashed" — it may just have been force-quit */

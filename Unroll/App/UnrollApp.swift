@@ -88,6 +88,24 @@ struct UnrollApp: App {
                     reader.goTo(0)
                 }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+                Divider()
+                // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上
+                Button(L10n.tr("reader.fit.window")) {
+                    reader.fitMode = .fitWindow
+                }
+                .keyboardShortcut("3", modifiers: .command)
+                Button(L10n.tr("reader.fit.width")) {
+                    reader.fitMode = .fitWidth
+                }
+                .keyboardShortcut("4", modifiers: .command)
+                Button(L10n.tr("reader.fit.height")) {
+                    reader.fitMode = .fitHeight
+                }
+                .keyboardShortcut("5", modifiers: .command)
+                Button(L10n.tr("reader.fit.actual")) {
+                    reader.fitMode = .actualSize
+                }
+                .keyboardShortcut("6", modifiers: .command)
             }
         }
     }
@@ -140,7 +158,7 @@ final class AppLifecycle: NSObject, NSApplicationDelegate {
 @MainActor
 enum ArchivePicker {
 
-    /// NSOpenPanel 限四种漫画归档 + zip(与 Info.plist 关联一致)
+    /// NSOpenPanel 限漫画归档 + 裸 zip/rar/7z(与 Info.plist 关联一致)
     static func pick() -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = false
@@ -156,5 +174,7 @@ enum ArchivePicker {
         "com.gfredr.unroll.cb7",
         "com.gfredr.unroll.cbt",
         "public.zip-archive",
+        "com.gfredr.unroll.rar",
+        "com.gfredr.unroll.sevenzip",
     ]
 }

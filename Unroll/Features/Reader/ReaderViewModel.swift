@@ -68,6 +68,26 @@ final class ReaderViewModel: ObservableObject {
         case rightToLeft
     }
 
+    /// 缩放档位(§2.1-4:适应窗口/适应宽/适应高/1:1)。
+    /// 自由缩放(捏合/双击)是叠加在档位基准上的临时系数,归 Canvas 管;
+    /// 档位属于阅读会话 —— 翻页不重置,只换书才回到默认。
+    enum FitMode: String {
+        case fitWindow      // 适应窗口(默认,整页完整可见)
+        case fitWidth       // 适应宽(宽屏看漫画的高频档)
+        case fitHeight      // 适应高
+        case actualSize     // 1:1 实际大小
+
+        /// 面包屑标签(过 sanitize 白名单)
+        var token: String {
+            switch self {
+            case .fitWindow:  return "fit"
+            case .fitWidth:   return "width"
+            case .fitHeight:  return "height"
+            case .actualSize: return "1to1"
+            }
+        }
+    }
+
     // MARK: - Published
 
     @Published private(set) var phase: Phase = .noDocument
@@ -88,6 +108,13 @@ final class ReaderViewModel: ObservableObject {
             guard oldValue != direction else { return }
             Breadcrumbs.shared.record(.directionChanged(direction == .leftToRight ? "ltr" : "rtl"))
             refreshSecondary()
+        }
+    }
+    /// 缩放档位(§2.1-4):切换只影响渲染基准,与页面数据无关,不触发加载
+    @Published var fitMode: FitMode = .fitWindow {
+        didSet {
+            guard oldValue != fitMode else { return }
+            Breadcrumbs.shared.record(.fitModeChanged(fitMode.token))
         }
     }
 

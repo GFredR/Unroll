@@ -201,7 +201,7 @@ private struct ReaderCanvas: View {
                 if let failure = viewModel.presentation.failure {
                     pageFailureCard(failure)
                 } else {
-                    spread
+                    spread(in: proxy.size)
                 }
 
                 if viewModel.presentation.isLoading {
@@ -219,10 +219,16 @@ private struct ReaderCanvas: View {
             .gesture(spatialTap(in: proxy))
             .gesture(TapGesture(count: 2).onEnded(toggleZoom))
             .gesture(magnify)
-            .gesture(zoom > 1 ? drag : nil)
+            // 平移:放大后;或档位本身可能溢出窗口(适应宽/适应高/1:1)时也放行
+            .gesture(zoom > 1 || viewModel.fitMode != .fitWindow ? drag : nil)
         }
         .onChange(of: viewModel.pageIndex) { _, _ in
             // 翻页即回到适配视图:缩放状态不属于「这一页」,属于「这次阅读会话」
+            zoom = 1
+            offset = .zero
+        }
+        .onChange(of: viewModel.fitMode) { _, _ in
+            // 换档位 = 换渲染基准:自由缩放系数与平移一并归零(档位本身保留)
             zoom = 1
             offset = .zero
         }
@@ -240,34 +246,63 @@ private struct ReaderCanvas: View {
 
     /// 当前摊位:单页 = 主图;双页 = 主图+次页(右开时视觉上第一页在右)
     @ViewBuilder
-    private var spread: some View {
+    private func spread(in size: CGSize) -> some View {
         if let primary = viewModel.presentation.image {
             if viewModel.layout == .dual, let secondary = viewModel.secondary {
-                spreadView([primary, secondary])
+                spreadView([primary, secondary], in: size)
             } else if viewModel.layout == .dual {
                 // 次页未就绪:主图先单页垫着(加载完自动变双页,不闪)
-                spreadView([primary])
+                spreadView([primary], in: size)
             } else {
-                spreadView([primary])
+                spreadView([primary], in: size)
             }
         }
     }
 
-    /// 摊位渲染:等高并排 + 共用缩放平移。右开 = 数组反序(第一页靠右,读向右→左)
-    private func spreadView(_ images: [CGImage]) -> some View {
+    /// 摊位渲染:按档位基准出尺寸 + 共用自由缩放平移。
+    /// 右开 = 数组反序(第一页靠右,读向右→左)
+    private func spreadView(_ images: [CGImage], in size: CGSize) -> some View {
         let ordered = viewModel.direction == .rightToLeft ? images.reversed() : images
         let effective = min(max(zoom * pinchScale, 1), maxZoom)
         return HStack(spacing: DesignSystem.Spacing.xs) {
             ForEach(Array(ordered.enumerated()), id: \.offset) { _, image in
+                let scale = pageScale(of: image, in: images, canvas: size)
                 Image(decorative: image, scale: 1)
                     .resizable()
-                    .scaledToFit()
+                    .frame(width: CGFloat(image.width) * scale,
+                           height: CGFloat(image.height) * scale)
             }
         }
         .scaleEffect(effective)
         .offset(x: offset.width + dragDelta.width,
                 y: offset.height + dragDelta.height)
         .animation(.easeOut(duration: 0.12), value: effective)
+    }
+
+    /// 单页在当前档位下的基准缩放(§2.1-4:适应窗口/适应宽/适应高/1:1)。
+    /// 摊内统一适配高度:总宽高比 = Σ(宽/高),双页并排不横向溢出
+    private func pageScale(of image: CGImage, in spread: [CGImage], canvas: CGSize) -> CGFloat {
+        guard canvas.width > 0, canvas.height > 0, image.height > 0 else { return 1 }
+        switch viewModel.fitMode {
+        case .actualSize:
+            return 1
+        case .fitHeight:
+            return canvas.height / CGFloat(image.height)
+        case .fitWindow, .fitWidth:
+            // 摊内可用宽 = 画布宽 − 页间距;H 使 Σ(w_i·H/h_i) = 可用宽
+            let gaps = CGFloat(spread.count - 1) * DesignSystem.Spacing.xs
+            let usableWidth = max(canvas.width - gaps, 1)
+            let totalAspect = spread.reduce(CGFloat(0)) {
+                $0 + CGFloat($1.width) / max(CGFloat($1.height), 1)
+            }
+            let fitHeight = usableWidth / max(totalAspect, 0.0001)
+            switch viewModel.fitMode {
+            case .fitWidth:
+                return fitHeight / CGFloat(image.height)
+            default:   // .fitWindow:还要保证整页高不超画布
+                return min(fitHeight, canvas.height) / CGFloat(image.height)
+            }
+        }
     }
 
     /// 单页失败卡片(图 6 Failed 态;归档仍打开,可继续翻其他页)

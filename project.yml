@@ -60,7 +60,7 @@ targets:
 
         # ---- 文件关联(设计文档 §3.3)----
         # 四种漫画归档 Default 抢占默认打开权(本机实测这些扩展名目前无主);
-        # zip 只做 Alternate,绝不抢系统归档工具的默认关联。
+        # zip / rar / 7z 裸扩展名只做 Alternate,绝不抢系统归档工具 / 解压器的默认关联。
         CFBundleDocumentTypes:
           - CFBundleTypeName: Comic Book ZIP Archive
             CFBundleTypeRole: Viewer
@@ -80,8 +80,16 @@ targets:
             LSItemContentTypes: [com.gfredr.unroll.cbt]
           - CFBundleTypeName: ZIP Archive
             CFBundleTypeRole: Viewer
-            LSHandlerRank: Alternate          # 只在 Open 面板支持,不抢默认
+            LSHandlerRank: Alternate          # 只在 Open 面板/Open With 支持,不抢默认
             LSItemContentTypes: [public.zip-archive]
+          - CFBundleTypeName: RAR Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.gfredr.unroll.rar]
+          - CFBundleTypeName: 7z Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.gfredr.unroll.sevenzip]
 
         # ---- UTI 导出声明(§3.3):conformsTo public.data + public.archive ----
         UTExportedTypeDeclarations:
@@ -105,6 +113,17 @@ targets:
             UTTypeConformsTo: [public.data, public.archive]
             UTTypeTagSpecification:
               public.filename-extension: [cbt]
+          # 裸 rar/7z:系统没有内置 UTI(部分解压器才注册),自声明才能挂 Alternate 关联
+          - UTTypeIdentifier: com.gfredr.unroll.rar
+            UTTypeDescription: RAR Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [rar]
+          - UTTypeIdentifier: com.gfredr.unroll.sevenzip
+            UTTypeDescription: 7z Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [7z]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gfredr.unroll

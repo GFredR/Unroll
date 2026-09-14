@@ -68,6 +68,12 @@
 "reader.direction.rtl" = "从右往左读(日漫)";
 "app.menu.firstPage" = "回到封面";
 
+/* 缩放档位(⌘3-⌘6) */
+"reader.fit.window" = "适应窗口";
+"reader.fit.width" = "适应宽";
+"reader.fit.height" = "适应高";
+"reader.fit.actual" = "实际大小(1:1)";
+
 /* ============ M4:崩溃自愿上报(§5.10) ============ */
 
 /* 文案要软:不断言「崩溃了」—— 也可能是被强杀(§5.10.3-②) */

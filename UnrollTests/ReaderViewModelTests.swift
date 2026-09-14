@@ -74,6 +74,34 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(vm.pageIndex, 0)
     }
 
+    // MARK: - 缩放档位(§2.1-4,2026-09-14 补齐)
+
+    /// 默认档位 = 适应窗口(整页完整可见)
+    func testDefaultFitModeIsFitWindow() {
+        XCTAssertEqual(ReaderViewModel().fitMode, .fitWindow)
+    }
+
+    /// 档位切换只改渲染基准,不碰归档状态机
+    func testFitModeSwitchingKeepsArchiveState() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.fitMode = .fitWidth
+        XCTAssertEqual(vm.fitMode, .fitWidth)
+        guard case .reading = vm.phase else {
+            return XCTFail("换档位不得影响 reading 态")
+        }
+        XCTAssertEqual(vm.pageCount, 3)
+        vm.fitMode = .actualSize
+        XCTAssertEqual(vm.fitMode, .actualSize)
+    }
+
+    /// 面包屑标签必须过 sanitize 白名单(§5.10.4 隐私红线由结构保证)
+    func testFitModeTokensPassSanitizeWhitelist() {
+        let modes: [ReaderViewModel.FitMode] = [.fitWindow, .fitWidth, .fitHeight, .actualSize]
+        for mode in modes {
+            XCTAssertNotNil(Breadcrumbs.sanitize(mode.token), "\(mode.token) 必须过白名单")
+        }
+    }
+
     // MARK: - 双页 / 右开(M3,§0 决策 3)
 
     private static let fixturesDir = URL(fileURLWithPath: #filePath)

@@ -45,6 +45,7 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case cacheEvict(page: Int)
     case layoutChanged(String)      // single / dual
     case directionChanged(String)   // ltr / rtl
+    case fitModeChanged(String)     // fit / width / height / 1to1
 
     var name: String {
         switch self {
@@ -60,6 +61,7 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .cacheEvict:       return "cacheEvict"
         case .layoutChanged:    return "layoutChanged"
         case .directionChanged: return "directionChanged"
+        case .fitModeChanged:   return "fitModeChanged"
         }
     }
 
@@ -89,6 +91,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return layout
         case .directionChanged(let direction):
             return direction
+        case .fitModeChanged(let mode):
+            return mode
         }
     }
 }
