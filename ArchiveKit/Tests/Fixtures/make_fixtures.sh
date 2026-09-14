@@ -147,9 +147,22 @@ print('📦 空/无图/损坏样本就绪')
 PY
 
 # ---- 8. 明文 cbt(tar,P0 格式) -------------------------------------------
+# 用 python tarfile 并显式清空 uname/gname/uid/gid:bsdtar 默认会把本机
+# 用户名烧进每个成员头的 ustar 字段(2026-09-14 实测泄漏,发布前必须清)。
 (
   cd staging
-  tar cf ../plain.cbt page1.png page2.png page10.png note.txt
+  python3 - <<'PY'
+import tarfile
+
+with tarfile.open('../plain.cbt', 'w', format=tarfile.USTAR_FORMAT) as t:
+    for p in ('page1.png', 'page2.png', 'page10.png', 'note.txt'):
+        ti = t.gettarinfo(p, arcname=p)
+        ti.uid = ti.gid = 0
+        ti.uname = ti.gname = ''
+        with open(p, 'rb') as f:
+            t.addfile(ti, f)
+print('📦 cbt 样本就绪(头字段无本机身份)')
+PY
 )
 
 # ---- 9+10. 7z 双形态加密(设计文档 POC 同款造法:py7zr) --------------------
