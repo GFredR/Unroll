@@ -3,9 +3,10 @@
 
 /* ============ M2:阅读器 ============ */
 
-/* 空态(拖入提示) */
+/* 空态(欢迎页) */
 "reader.empty.title" = "开卷";
 "reader.empty.hint" = "把 .cbz / .cbr / .cb7 / .cbt 文件拖进窗口,\n或在访达中双击打开。";
+"reader.empty.open" = "打开文件…";
 
 /* 打开中 */
 "reader.opening" = "正在打开…";

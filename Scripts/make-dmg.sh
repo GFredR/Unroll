@@ -85,6 +85,13 @@ fi
 
 # 5. 压成最终 dmg
 echo "→ 压缩为最终 dmg"
+# 布局步骤的 detach 是 `|| true`:一旦没卸干净,同名卷占着 temp 镜像,
+# convert 必报「资源暂时不可用」(2026-09-14 实测踩坑)—— 这里强制清场
+RESIDUAL="$(mount | grep -F "on /Volumes/$VOL_NAME " | awk '{print $1}' || true)"
+if [ -n "$RESIDUAL" ]; then
+  echo "→ 卸载残留卷 $RESIDUAL"
+  hdiutil detach "$RESIDUAL" > /dev/null || hdiutil detach -force "$RESIDUAL" > /dev/null
+fi
 rm -f "$DIST_DIR/$DMG_NAME"
 hdiutil convert "$TEMP_DMG" -format UDZO -o "$DIST_DIR/$DMG_NAME" > /dev/null
 rm -f "$TEMP_DMG"

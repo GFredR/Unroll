@@ -99,6 +99,14 @@ if [ "${UTI_COUNT:-0}" -lt 4 ] || [ "${DOC_COUNT:-0}" -lt 5 ]; then
   exit 1
 fi
 
+# Dock 图标是「像个正经 App」的底线:没编进 icns,Dock/Finder 只能显示通用白板
+# (2026-09-14 实测踩坑:project.yml 缺 ASSETCATALOG_COMPILER_APPICON_NAME 时静默丢失)
+if [ ! -f "$APP_DIR/Contents/Resources/AppIcon.icns" ]; then
+  echo "  ✗ 缺少 AppIcon.icns —— Dock/Finder 会显示通用图标(project.yml 需设 ASSETCATALOG_COMPILER_APPICON_NAME)" >&2
+  exit 1
+fi
+echo "  图标    : AppIcon.icns ✓"
+
 echo ""
 echo "✓ 生成 $APP_DIR"
 echo "  → open $APP_DIR"

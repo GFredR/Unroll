@@ -25,7 +25,7 @@ struct ReaderView: View {
         Group {
             switch viewModel.phase {
             case .noDocument:
-                EmptyStateView()
+                EmptyStateView(onOpen: { viewModel.open(url: $0) })
             case .opening:
                 OpeningView()
             case .failed(let failure):
@@ -34,8 +34,10 @@ struct ReaderView: View {
                 ReaderCanvas(viewModel: viewModel)
             }
         }
-        .background(DesignSystem.Palette.canvas.ignoresSafeArea())
+        // 顺序铁律:先 .frame 撑满窗口再 .background —— 反过来背景只裹住内容
+        // 自身大小,窗口中央会浮一块「内容大小的色块」(2026-09-14 实测踩坑)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(DesignSystem.Palette.canvas.ignoresSafeArea())
         // 拖拽打开:全阶段可用(空态的主入口、阅读中的换书入口)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first else { return false }
@@ -45,26 +47,65 @@ struct ReaderView: View {
     }
 }
 
-// MARK: - 空态(拖入提示)
+// MARK: - 空态(欢迎页:AppIcon + 打开按钮 + 虚线拖放区)
 
 private struct EmptyStateView: View {
 
+    /// 「打开文件…」回调(ReaderView 注入 viewModel.open,url 归 VM 管,与 FailureView 同款)
+    let onOpen: (URL) -> Void
+
     var body: some View {
-        VStack(spacing: DesignSystem.Spacing.md) {
-            Image(systemName: "book")
-                .font(.system(size: 64))
-                .foregroundStyle(DesignSystem.Palette.brand)   // 产品特色位用品牌色(§7 视觉定锚)
-                .accessibilityHidden(true)                     // 装饰性图标不进 VoiceOver(AGENTS.md 十一.3)
+        VStack(spacing: DesignSystem.Spacing.lg) {
+            appIcon
+                .shadow(color: .black.opacity(0.55), radius: 14, x: 0, y: 6)
 
-            Text(L10n.tr("reader.empty.title"))
-                .font(.system(size: DesignSystem.Typography.title, weight: .bold))
+            VStack(spacing: DesignSystem.Spacing.sm) {
+                Text(L10n.tr("reader.empty.title"))
+                    .font(.system(size: DesignSystem.Typography.display, weight: .bold))
 
-            Text(L10n.tr("reader.empty.hint"))
-                .font(.system(size: DesignSystem.Typography.body))
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, DesignSystem.Spacing.lg)
+                Text(L10n.tr("reader.empty.hint"))
+                    .font(.system(size: DesignSystem.Typography.body))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+            }
+
+            Button(L10n.tr("reader.empty.open"), action: chooseFile)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .tint(DesignSystem.Palette.brand)
+                .keyboardShortcut("o", modifiers: .command)
         }
+        // 虚线框:明示整块区域都能拖文件进来(拖放挂在 ReaderView 根部,全阶段可用)
+        .padding(DesignSystem.Spacing.xl + DesignSystem.Spacing.md)
+        .overlay(
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.dropZone)
+                .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7, 7]))
+                .foregroundStyle(Color.white.opacity(0.14))
+                .padding(DesignSystem.Spacing.lg)
+        )
+    }
+
+    private func chooseFile() {
+        if let url = ArchivePicker.pick() {
+            onOpen(url)
+        }
+    }
+
+    /// 直接用 AppIcon(Dock / Finder 同一张脸,品牌一致);SF Symbol 仅作兜底
+    private var appIcon: some View {
+        Group {
+            if let icon = NSImage(named: "AppIcon") {
+                Image(nsImage: icon)
+                    .resizable()
+            } else {
+                Image(systemName: "book")
+                    .font(.system(size: 64))
+                    .foregroundStyle(DesignSystem.Palette.brand)
+            }
+        }
+        .frame(width: 96, height: 96)
+        .accessibilityHidden(true)   // 装饰性图标不进 VoiceOver(AGENTS.md 十一.3)
     }
 }
 

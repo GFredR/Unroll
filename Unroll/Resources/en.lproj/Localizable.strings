@@ -3,9 +3,10 @@
 
 /* ============ M2:Reader ============ */
 
-/* Empty state (drop hint) */
+/* Empty state (welcome screen) */
 "reader.empty.title" = "Unroll";
 "reader.empty.hint" = "Drop a .cbz / .cbr / .cb7 / .cbt file into this window,\nor double-click it in Finder.";
+"reader.empty.open" = "Open File…";
 
 /* Opening */
 "reader.opening" = "Opening…";

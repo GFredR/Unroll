@@ -19,6 +19,8 @@ enum DesignSystem {
 
     /// 字号(pt)—— 用 system size 保证跟随系统动态字重的基准值
     enum Typography {
+        /// 空态欢迎页主标题(2026-09-14 UI 重做)
+        static let display: CGFloat = 28
         static let title: CGFloat = 24
         static let body: CGFloat = 14
         static let footnote: CGFloat = 11
@@ -28,6 +30,8 @@ enum DesignSystem {
 
     /// 圆角
     enum Radius {
+        /// 空态虚线拖放框(2026-09-14 UI 重做)
+        static let dropZone: CGFloat = 20
         static let card: CGFloat = 8
         static let control: CGFloat = 6
     }

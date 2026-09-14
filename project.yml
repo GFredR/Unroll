@@ -56,6 +56,7 @@ targets:
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSPrincipalClass: NSApplication
         LSApplicationCategoryType: public.app-category.graphics-design
+        CFBundleIconFile: AppIcon
 
         # ---- 文件关联(设计文档 §3.3)----
         # 四种漫画归档 Default 抢占默认打开权(本机实测这些扩展名目前无主);
@@ -107,6 +108,9 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gfredr.unroll
+        # Dock / Finder / 妙控鼠标预览的图标来源:不设这行 .app 里就没有 icns,
+        # Dock 只能显示通用白板图标(2026-09-14 实测踩坑)
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Unroll/Unroll.entitlements   # 沙盒开启(§0 决策 13)
         ENABLE_HARDENED_RUNTIME: YES    # 公证(M4 分发)的前置要求
         ENABLE_USER_SCRIPT_SANDBOXING: YES
