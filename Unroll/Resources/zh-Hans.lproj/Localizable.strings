@@ -5,7 +5,7 @@
 
 /* 空态(欢迎页) */
 "reader.empty.title" = "开卷";
-"reader.empty.hint" = "把 .cbz / .cbr / .cb7 / .cbt 文件拖进窗口,\n或在访达中双击打开。";
+"reader.empty.hint" = "拖入 .cbz / .cbr / .cb7 / .cbt 漫画包,\n裸的 .zip / .rar / .7z / .tar 也认 —— 或在访达中双击打开。";
 "reader.empty.open" = "打开文件…";
 
 /* 打开中 */
