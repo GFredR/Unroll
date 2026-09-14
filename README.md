@@ -6,6 +6,10 @@ A lightweight, native **macOS comic archive reader**. Double-click a `.cbz / .cb
 
 Reading a comic shouldn't require unpacking it first. Most archive tools make you extract to a temp folder, then open an image viewer, and then clean up afterwards — for a 500 MB archive that's half a gigabyte of disk churn just to read page 1. Unroll streams pages straight out of the archive instead.
 
+## Demo
+
+![Unroll demo](docs/demo.gif)
+
 ## Features
 
 - **Reads straight from the archive** — nothing is ever extracted to disk, no thumbnail database is built, no "library" is imported. Open a file, read it, quit.
