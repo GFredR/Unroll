@@ -22,7 +22,11 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position.
 - **Keyboard-first** — every action is reachable without touching the mouse.
 - **HUD overlay** — filename, page number and a progress bar; fades out 2.5 s after you stop moving.
-- **Recent documents** — the last 10 archives, remembered with security-scoped bookmarks so the sandbox can reopen them. The menu lists file names only.
+- **Recent documents** — the last 10 archives, remembered with security-scoped bookmarks so the sandbox can reopen them. The menu lists file names only, and shows how far you got in each one.
+- **Resume where you left off** — per archive, it remembers the page, single/two-page layout, reading direction and zoom mode. Identity is "file name + file size", so no path is ever stored.
+- **Bookmarks** — `⌘D` marks the current page, `⌥⌘↑` / `⌥⌘↓` jump between bookmarks (wrapping at the ends), and the Bookmarks menu jumps straight to any marked page.
+- **Four zoom modes** — fit window / fit width / fit height / actual size (`⌘3`–`⌘6`), with pinch and double-click zoom layered on top.
+- **Go to page** — `⌥⌘G` jumps to a page number.
 - **Encrypted archives are handled honestly** — detected up front, reported clearly, never a crash. See below.
 - **Native SwiftUI, macOS 14+, sandboxed, and with no network permission at all.**
 
@@ -100,6 +104,11 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⌘1` / `⌘2` | Single page / two-page spread |
 | `⇧⌘L` / `⇧⌘R` | Left-to-right / right-to-left (manga) |
 | `⇧⌘↑` | Back to cover |
+| `⇧⌘↓` | Jump to last page |
+| `⌥⌘G` | Go to page… |
+| `⌘3` / `⌘4` / `⌘5` / `⌘6` | Fit window / fit width / fit height / actual size (1:1) |
+| `⌘D` | Add / remove a bookmark on the current page |
+| `⌥⌘↑` / `⌥⌘↓` | Previous / next bookmark (wraps at the ends) |
 | `←` / `→` | Previous / next page — follows the reading direction |
 | `Space` `↓` `Page Down` `End` | Next page |
 | `Page Up` `Home` | Previous page |
@@ -119,6 +128,7 @@ Crash reporting is **opt-in and manual**. If the app was killed or quit abnormal
 - **No password entry** for encrypted archives (v1).
 - **RAR 4 is unverified** — RAR 5 has been tested against real samples; RAR 4 has not.
 - **Very large solid 7z archives** cost roughly 90 ms of LZMA2 decompression per page. Prefetching is designed to hide that, but jumping far ahead in a huge solid archive has a real, visible cost.
+- **Resume and bookmarks identify an archive by "file name + file size"** — rename the file, or change its contents so the size differs, and it counts as a different archive: your progress and bookmarks stay behind. That is the price of never storing a path.
 - **Not notarized** — ad-hoc signing only, hence the first-launch Gatekeeper step above.
 - **macOS only in v1.** The archive engine is kept as a standalone SwiftPM package (`ArchiveKit`) specifically so an iOS / iPadOS build can reuse it later.
 

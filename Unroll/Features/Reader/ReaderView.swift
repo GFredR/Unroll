@@ -44,6 +44,10 @@ struct ReaderView: View {
             viewModel.open(url: url)
             return true
         }
+        // 页码跳转(⌥⌘G):菜单命令只置位 VM 的开关,面板自身归 View(命令不持 View 状态)
+        .sheet(isPresented: $viewModel.isJumpSheetPresented) {
+            PageJumpSheet(viewModel: viewModel)
+        }
     }
 }
 
@@ -391,6 +395,8 @@ private struct ReaderCanvas: View {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // 面板(页码跳转)打开时让位:空格/方向键必须能正常进输入框
+            guard !viewModel.isJumpSheetPresented else { return event }
             // 带修饰键的按键(⌘O / ⌘W / 快捷键系统)一律放行,绝不拦截
             guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
                 return event
@@ -443,6 +449,8 @@ private struct ReaderCanvas: View {
     private func installScrollMonitor() {
         guard scrollMonitor == nil else { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
+            // 面板打开时让位(滚轮不翻页)
+            guard !viewModel.isJumpSheetPresented else { return event }
             guard zoom * pinchScale <= 1 else { return event }
             let now = Date()
             guard now.timeIntervalSince(lastWheelPageAt) > 0.3 else { return event }
@@ -467,5 +475,68 @@ private struct ReaderCanvas: View {
             NSEvent.removeMonitor(monitor)
             scrollMonitor = nil
         }
+    }
+}
+
+// MARK: - 页码跳转面板(⌥⌘G,2026-09-15)
+
+/// 输入 1-based 页码直接跳页。解析与夹紧全在 VM 的 `parsePageInput`(纯函数,可单测),
+/// 本视图只负责输入与错误提示 —— 面板不持页码状态,关掉即无副作用。
+private struct PageJumpSheet: View {
+
+    @ObservedObject var viewModel: ReaderViewModel
+    @State private var text = ""
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            Text(L10n.tr("reader.jump.title"))
+                .font(.system(size: DesignSystem.Typography.title, weight: .semibold))
+
+            Text(L10n.tr("reader.jump.range", viewModel.pageCount))
+                .font(.system(size: DesignSystem.Typography.footnote))
+                .foregroundStyle(.secondary)
+
+            TextField(L10n.tr("reader.jump.placeholder"), text: $text)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 200)
+                .focused($isFocused)
+                .onSubmit(submit)
+
+            // 非法输入即时提示(不等到点「跳转」才报错)
+            if !text.isEmpty, pageIndex == nil {
+                Text(L10n.tr("reader.jump.invalid", viewModel.pageCount))
+                    .font(.system(size: DesignSystem.Typography.footnote))
+                    .foregroundStyle(DesignSystem.Palette.brand)
+            }
+
+            HStack(spacing: DesignSystem.Spacing.sm) {
+                Spacer()
+                Button(L10n.tr("reader.jump.cancel")) {
+                    viewModel.isJumpSheetPresented = false
+                }
+                .keyboardShortcut(.cancelAction)      // Esc
+                Button(L10n.tr("reader.jump.go"), action: submit)
+                    .keyboardShortcut(.defaultAction)  // Return
+                    .disabled(pageIndex == nil)
+            }
+        }
+        .padding(DesignSystem.Spacing.lg)
+        .frame(minWidth: 280)
+        .onAppear {
+            text = "\(viewModel.pageIndex + 1)"   // 预填当前页,改一位数字即可
+            isFocused = true
+        }
+    }
+
+    /// 解析结果(0-based);非法 → nil
+    private var pageIndex: Int? {
+        ReaderViewModel.parsePageInput(text, pageCount: viewModel.pageCount)
+    }
+
+    private func submit() {
+        guard let index = pageIndex else { return }
+        viewModel.goTo(index)
+        viewModel.isJumpSheetPresented = false
     }
 }

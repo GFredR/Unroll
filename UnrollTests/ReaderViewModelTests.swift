@@ -16,16 +16,27 @@ final class ReaderViewModelTests: XCTestCase {
     /// **必须隔离**:续读会持久化「上次读到第几页」,若走宿主 App 的真实偏好,
     /// 单测之间会互相污染(前一个用例翻到第 2 页,后一个用例一打开就被恢复过去)。
     private static let suiteName = "test.readervm.progress"
+    /// 书签同样要隔离:它也会持久化,走宿主真实偏好一样会跨用例污染
+    private static let bookmarkSuiteName = "test.readervm.bookmarks"
 
     /// reuseProgress = true 时保留已有进度(专供「续读恢复」用例模拟重开)
     private func makeViewModel(reuseProgress: Bool = false) -> ReaderViewModel {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
-        if !reuseProgress { defaults.removePersistentDomain(forName: Self.suiteName) }
-        return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults))
+        let bookmarkDefaults = UserDefaults(suiteName: Self.bookmarkSuiteName) ?? .standard
+        if !reuseProgress {
+            defaults.removePersistentDomain(forName: Self.suiteName)
+            bookmarkDefaults.removePersistentDomain(forName: Self.bookmarkSuiteName)
+        }
+        return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults),
+                               bookmarkStore: Bookmarks(defaults: bookmarkDefaults))
     }
 
     private func progressStore() -> ReadingProgress {
         ReadingProgress(defaults: UserDefaults(suiteName: Self.suiteName) ?? .standard)
+    }
+
+    private func bookmarkStore() -> Bookmarks {
+        Bookmarks(defaults: UserDefaults(suiteName: Self.bookmarkSuiteName) ?? .standard)
     }
 
     private func cleanProgress() {
@@ -256,5 +267,117 @@ final class ReaderViewModelTests: XCTestCase {
     private func fixtureSize(_ name: String) -> Int {
         let path = Self.fixturesDir.appendingPathComponent(name).path
         return (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+    }
+
+    // MARK: - 书签(v2,2026-09-15)
+
+    /// 标记/取消标记当前页,且落到存储(不只在内存里)
+    func testToggleBookmarkMarksAndUnmarks() async throws {
+        let vm = try await openFixtureOrSkip()
+
+        XCTAssertFalse(vm.isCurrentPageBookmarked, "初始未标记")
+        vm.toggleBookmark()
+        XCTAssertTrue(vm.isCurrentPageBookmarked)
+        XCTAssertEqual(vm.bookmarkedPages, [0])
+        XCTAssertEqual(bookmarkStore().pages(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                        size: fixtureSize("plain.cbz"))),
+                       [0], "标记必须落盘,不能只活在内存")
+
+        vm.toggleBookmark()
+        XCTAssertFalse(vm.isCurrentPageBookmarked)
+        XCTAssertTrue(vm.bookmarkedPages.isEmpty)
+    }
+
+    /// 未在读文档时标记:静默无操作(不得崩、不得写出无主书签)
+    func testToggleBookmarkWithoutDocumentIsNoOp() {
+        let vm = makeViewModel()
+        vm.toggleBookmark()
+        XCTAssertTrue(vm.bookmarkedPages.isEmpty)
+        XCTAssertTrue(bookmarkStore().pages(forKey: "whatever").isEmpty)
+    }
+
+    /// 重开同一本文档:书签集合恢复
+    func testBookmarksSurviveReopen() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+
+        let first = makeViewModel()
+        await first.open(url: url).value
+        guard case .reading = first.phase else { return XCTFail("首次打开应进入 reading") }
+        first.goTo(2)
+        first.toggleBookmark()
+
+        let second = makeViewModel(reuseProgress: true)
+        await second.open(url: url).value
+        guard case .reading = second.phase else { return XCTFail("重开应进入 reading") }
+        XCTAssertEqual(second.bookmarkedPages, [2], "书签应随文档恢复")
+    }
+
+    /// 书签间跳转:无更前/更后的书签时绕回,页码升序且不重复
+    func testBookmarkNavigationWrapsAround() async throws {
+        let vm = try await openFixtureOrSkip()
+        let last = vm.pageCount - 1
+
+        vm.goTo(0)
+        vm.toggleBookmark()
+        vm.goTo(last)
+        vm.toggleBookmark()
+        XCTAssertEqual(vm.bookmarkedPages, [0, last], "书签集合恒按页码升序")
+
+        // 已在最后一个书签 → 下一个绕回第一个
+        vm.goToNextBookmark()
+        XCTAssertEqual(vm.pageIndex, 0)
+        // 已在第一个书签 → 上一个绕回最后一个
+        vm.goToPreviousBookmark()
+        XCTAssertEqual(vm.pageIndex, last)
+    }
+
+    /// 无书签时跳转不动作;清空本书签后集合为空且存储已删
+    func testBookmarkNavigationAndClearWithNoBookmarks() async throws {
+        let vm = try await openFixtureOrSkip()
+
+        vm.goToNextBookmark()       // 空集合:不动
+        XCTAssertEqual(vm.pageIndex, 0)
+        vm.goToPreviousBookmark()
+        XCTAssertEqual(vm.pageIndex, 0)
+
+        vm.toggleBookmark()
+        vm.clearBookmarks()
+        XCTAssertTrue(vm.bookmarkedPages.isEmpty)
+        XCTAssertTrue(bookmarkStore().pages(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                        size: fixtureSize("plain.cbz"))).isEmpty)
+    }
+
+    /// 「清空最近打开」连带清书签(与进度同一处收口,不留无主数据)
+    func testClearProgressAlsoClearsBookmarks() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.toggleBookmark()
+        XCTAssertFalse(vm.bookmarkedPages.isEmpty)
+
+        vm.clearProgress()
+        XCTAssertTrue(vm.bookmarkedPages.isEmpty)
+        XCTAssertTrue(bookmarkStore().pages(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                        size: fixtureSize("plain.cbz"))).isEmpty)
+    }
+
+    // MARK: - 页码跳转解析(纯函数,不依赖 fixture)
+
+    func testParsePageInputAcceptsValidPages() {
+        XCTAssertEqual(ReaderViewModel.parsePageInput("1", pageCount: 200), 0)
+        XCTAssertEqual(ReaderViewModel.parsePageInput("200", pageCount: 200), 199, "末页合法")
+        XCTAssertEqual(ReaderViewModel.parsePageInput("  5 ", pageCount: 200), 4, "容忍首尾空白")
+        XCTAssertEqual(ReaderViewModel.parsePageInput("１２", pageCount: 200), 11, "全角数字(中文输入法常见)")
+    }
+
+    func testParsePageInputRejectsInvalid() {
+        XCTAssertNil(ReaderViewModel.parsePageInput("0", pageCount: 200), "页码从 1 开始")
+        XCTAssertNil(ReaderViewModel.parsePageInput("201", pageCount: 200), "越界")
+        XCTAssertNil(ReaderViewModel.parsePageInput("-3", pageCount: 200))
+        XCTAssertNil(ReaderViewModel.parsePageInput("abc", pageCount: 200))
+        XCTAssertNil(ReaderViewModel.parsePageInput("", pageCount: 200))
+        XCTAssertNil(ReaderViewModel.parsePageInput("1.5", pageCount: 200))
+        XCTAssertNil(ReaderViewModel.parsePageInput("7", pageCount: 0), "空文档不跳转")
     }
 }

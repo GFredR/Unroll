@@ -21,8 +21,17 @@ struct HUDView: View {
                     .truncationMode(.middle)   // 长文件名掐中间,保留扩展名可辨
             }
 
-            Text(L10n.tr("reader.page.progress", viewModel.pageIndex + 1, viewModel.pageCount))
-                .font(.system(size: DesignSystem.Typography.hud).monospacedDigit())
+            HStack(spacing: DesignSystem.Spacing.xs) {
+                // 当前页已标记书签(2026-09-15):纯视觉指示,不参与布局计算
+                if viewModel.isCurrentPageBookmarked {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: DesignSystem.Typography.footnote))
+                        .foregroundStyle(DesignSystem.Palette.brand)
+                }
+
+                Text(L10n.tr("reader.page.progress", viewModel.pageIndex + 1, viewModel.pageCount))
+                    .font(.system(size: DesignSystem.Typography.hud).monospacedDigit())
+            }
 
             ProgressView(value: viewModel.pageCount > 0
                          ? Double(viewModel.pageIndex + 1) / Double(viewModel.pageCount) : 0)

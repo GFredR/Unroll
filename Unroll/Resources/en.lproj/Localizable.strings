@@ -68,12 +68,36 @@
 "reader.direction.rtl" = "Right to Left (Manga)";
 "app.menu.firstPage" = "Back to Cover";
 "app.menu.lastPage" = "Jump to Last Page";
+"app.menu.jumpToPage" = "Go to Page…";
 
 /* Fit modes (⌘3-⌘6) */
 "reader.fit.window" = "Fit Window";
 "reader.fit.width" = "Fit Width";
 "reader.fit.height" = "Fit Height";
 "reader.fit.actual" = "Actual Size (1:1)";
+
+/* ============ Bookmarks / resume hints (2026-09-15, v2) ============ */
+
+/* Bookmarks menu */
+"app.menu.bookmarks" = "Bookmarks";
+"app.menu.addBookmark" = "Add Bookmark";
+"app.menu.removeBookmark" = "Remove Bookmark";
+"app.menu.previousBookmark" = "Previous Bookmark";
+"app.menu.nextBookmark" = "Next Bookmark";
+"app.menu.clearBookmarks" = "Clear Bookmarks";
+"reader.bookmark.pageItem" = "Page %ld";
+
+/* Resume hint in the Open Recent menu ("read up to page N") */
+"app.menu.recentProgress" = "%@ · P.%ld/%ld";
+"app.menu.recentProgressUnknownTotal" = "%@ · P.%ld";
+
+/* Go-to-page sheet (⌥⌘G) */
+"reader.jump.title" = "Go to Page";
+"reader.jump.range" = "%ld pages · enter the page you want";
+"reader.jump.placeholder" = "Page number";
+"reader.jump.invalid" = "Enter a page between 1 and %ld";
+"reader.jump.go" = "Go";
+"reader.jump.cancel" = "Cancel";
 
 /* ============ M4: Voluntary crash report (§5.10) ============ */
 

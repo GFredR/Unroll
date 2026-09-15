@@ -138,22 +138,32 @@ final class ReaderViewModel: ObservableObject {
     /// 部分加密包的加密页数(单页失败卡片的「其余 %d 页可读」用)
     private var encryptedPageCount = 0
 
-    // MARK: - 续读记忆(v2「进度记忆」,2026-09-15)
+    // MARK: - 续读记忆 / 书签(2026-09-15)
 
     private let progressStore: ReadingProgress
-    /// 当前文档的进度键(打开成功后才有;nil = 未在阅读,不落进度)
-    private var progressKey: String?
+    private let bookmarkStore: Bookmarks
+    /// 当前文档的身份键(打开成功后才有;nil = 未在阅读,不落进度/书签)
+    private var documentKey: String?
     /// 恢复期间不回写进度(否则切档位的 didSet 会用页 0 覆盖掉已存的进度)
     private var isRestoringProgress = false
 
-    /// progressStore 可注入(单测用隔离 suite)
-    init(progressStore: ReadingProgress = ReadingProgress()) {
+    /// 本书已标记的页(升序);换书时随文档刷新
+    @Published private(set) var bookmarkedPages: [Int] = []
+    /// 页码跳转面板显隐(菜单命令置位,View 渲染 sheet —— 命令不持有 View 状态)
+    @Published var isJumpSheetPresented = false
+
+    /// 存储可注入(单测用隔离 suite)
+    init(progressStore: ReadingProgress = ReadingProgress(),
+         bookmarkStore: Bookmarks = Bookmarks()) {
         self.progressStore = progressStore
+        self.bookmarkStore = bookmarkStore
     }
 
-    /// 清空全部续读进度(「清空最近打开」连带调用,不留无主进度)
+    /// 清空全部续读进度与书签(「清空最近打开」连带调用,不留无主数据)
     func clearProgress() {
         progressStore.clear()
+        bookmarkStore.clear()
+        bookmarkedPages = []
     }
 
     // MARK: - 打开(图 3 主时序)
@@ -172,7 +182,8 @@ final class ReaderViewModel: ObservableObject {
         pageCount = 0
         pageIndex = 0
         encryptedPageCount = 0
-        progressKey = nil          // 旧文档的进度键立即失效,换书后不得误写
+        documentKey = nil          // 旧文档的进度键立即失效,换书后不得误写
+        bookmarkedPages = []
         presentation = PagePresentation()
         secondary = nil
         documentName = url.lastPathComponent
@@ -198,7 +209,7 @@ final class ReaderViewModel: ObservableObject {
 
             // 续读键:文件名 + 文件大小(stat 放后台,不占主线程,AGENTS.md 十二.1)
             let bytes = await fileSize(of: url)
-            progressKey = ReadingProgress.key(name: url.lastPathComponent, size: bytes)
+            documentKey = ReadingProgress.key(name: url.lastPathComponent, size: bytes)
 
             // 面包屑:格式 + 大小桶(不含文件名)/ 页数 / 加密页数(§5.10.4 允许字段)
             Breadcrumbs.shared.record(.openArchive(format: Self.formatToken(document.format),
@@ -210,7 +221,10 @@ final class ReaderViewModel: ObservableObject {
 
             // 续读恢复:有记录 → 套用阅读模式 + 跳到上次页码;无记录 → 从封面开始
             var startPage = 0
-            if let key = progressKey, let saved = progressStore.entry(forKey: key),
+            if let key = documentKey {
+                bookmarkedPages = bookmarkStore.pages(forKey: key)
+            }
+            if let key = documentKey, let saved = progressStore.entry(forKey: key),
                document.entries.indices.contains(saved.page), saved.page > 0 {
                 isRestoringProgress = true
                 if let l = PageLayout(rawValue: saved.layout) { layout = l }
@@ -342,12 +356,62 @@ final class ReaderViewModel: ObservableObject {
 
     /// 回写续读进度(仅在阅读态且有进度键时;失败静默 —— 续读绝不致命)
     private func saveProgressNow() {
-        guard phase == .reading, let key = progressKey, !isRestoringProgress else { return }
+        guard phase == .reading, let key = documentKey, !isRestoringProgress else { return }
         progressStore.save(key: key,
                            page: pageIndex,
+                           total: pageCount,
                            layout: layout.rawValue,
                            direction: direction.rawValue,
                            fitMode: fitMode.rawValue)
+    }
+
+    // MARK: - 书签(2026-09-15)
+
+    /// 当前页是否已标记
+    var isCurrentPageBookmarked: Bool {
+        bookmarkedPages.contains(pageIndex)
+    }
+
+    /// 标记 / 取消标记当前页
+    func toggleBookmark() {
+        guard phase == .reading, let key = documentKey else { return }
+        let marked = bookmarkStore.toggle(page: pageIndex, key: key)
+        bookmarkedPages = bookmarkStore.pages(forKey: key)
+        Breadcrumbs.shared.record(.bookmarkToggled(page: pageIndex, marked: marked))
+    }
+
+    /// 跳到下一个书签(无更后面的书签 → 回到第一个;没有书签 → 不动)
+    func goToNextBookmark() {
+        guard phase == .reading, !bookmarkedPages.isEmpty else { return }
+        let next = bookmarkedPages.first { $0 > pageIndex } ?? bookmarkedPages[0]
+        goTo(next)
+    }
+
+    /// 跳到上一个书签(无更前面的书签 → 绕到最后一个)
+    func goToPreviousBookmark() {
+        guard phase == .reading, !bookmarkedPages.isEmpty else { return }
+        let previous = bookmarkedPages.last { $0 < pageIndex } ?? bookmarkedPages[bookmarkedPages.count - 1]
+        goTo(previous)
+    }
+
+    /// 清空本书全部书签
+    func clearBookmarks() {
+        guard let key = documentKey else { return }
+        bookmarkStore.clearDocument(key: key)
+        bookmarkedPages = []
+    }
+
+    // MARK: - 页码跳转(⌥⌘G)
+
+    /// 解析用户输入 → 页码下标(1-based 输入,返回 0-based)。
+    /// 容忍空格与全角数字;非法/越界 → nil(调用方不跳转,不留副作用)
+    static func parsePageInput(_ text: String, pageCount: Int) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, pageCount > 0 else { return nil }
+        // 全角数字 → 半角(中文输入法下很常见)
+        let normalized = trimmed.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? trimmed
+        guard let number = Int(normalized), number >= 1, number <= pageCount else { return nil }
+        return number - 1
     }
 
     // MARK: - 错误 → 文案 key(§5.9.3.1 分流)

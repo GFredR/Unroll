@@ -20,8 +20,10 @@ struct UnrollApp: App {
 
     @StateObject private var reader = ReaderViewModel()
     @State private var recents = RecentDocuments()
-    /// 菜单展示的最近列表(open 后与菜单即将显示时刷新)
+    /// 菜单展示的最近列表(open 后与翻页时刷新)
     @State private var recentList: [RecentDocuments.Entry] = []
+    /// 文件名 → 续读条目(菜单标注「读到第几页」用;与 recentList 同步刷新)
+    @State private var progressIndex = RecentProgressIndex(entries: [:])
 
     /// M4:崩溃采集的会话标记要靠 AppKit 生命周期回调闭合
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
@@ -38,6 +40,8 @@ struct UnrollApp: App {
                     openArchive(url: url)
                 }
                 .onAppear { reloadRecents() }
+                // 翻页后刷新进度索引:最近打开菜单里的「P.3/200」要跟得上阅读位置
+                .onChange(of: reader.pageIndex) { _, _ in reloadRecents() }
                 // M4:启动 1.5s 后自检「上次是否异常退出」,是则问一次(§5.10.5-①)
                 .crashPrompt()
         }
@@ -55,7 +59,7 @@ struct UnrollApp: App {
 
             CommandMenu(L10n.tr("app.menu.openRecent")) {
                 ForEach(recentList) { entry in
-                    Button(entry.displayName) {
+                    Button(recentLabel(for: entry)) {
                         openRecent(entry)
                     }
                 }
@@ -96,6 +100,11 @@ struct UnrollApp: App {
                     reader.goTo(reader.pageCount - 1)
                 }
                 .keyboardShortcut(.downArrow, modifiers: [.command, .shift])
+                Button(L10n.tr("app.menu.jumpToPage")) {
+                    reader.isJumpSheetPresented = true
+                }
+                .keyboardShortcut("g", modifiers: [.command, .option])
+                .disabled(reader.phase != .reading)
                 Divider()
                 // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上
                 Button(L10n.tr("reader.fit.window")) {
@@ -114,6 +123,44 @@ struct UnrollApp: App {
                     reader.fitMode = .actualSize
                 }
                 .keyboardShortcut("6", modifiers: .command)
+            }
+
+            // 书签(2026-09-15):标记当前页 + 在书签间跳转 + 直达某一页
+            CommandMenu(L10n.tr("app.menu.bookmarks")) {
+                Button(reader.isCurrentPageBookmarked
+                       ? L10n.tr("app.menu.removeBookmark")
+                       : L10n.tr("app.menu.addBookmark")) {
+                    reader.toggleBookmark()
+                }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(reader.phase != .reading)
+
+                Divider()
+
+                Button(L10n.tr("app.menu.previousBookmark")) {
+                    reader.goToPreviousBookmark()
+                }
+                .keyboardShortcut(.upArrow, modifiers: [.command, .option])
+                .disabled(reader.bookmarkedPages.isEmpty)
+                Button(L10n.tr("app.menu.nextBookmark")) {
+                    reader.goToNextBookmark()
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .option])
+                .disabled(reader.bookmarkedPages.isEmpty)
+
+                if !reader.bookmarkedPages.isEmpty {
+                    Divider()
+                    // 直达某一页;上限 20 条(菜单过长反而难用,大数量场景属 v3 的书签面板)
+                    ForEach(reader.bookmarkedPages.prefix(20), id: \.self) { page in
+                        Button(L10n.tr("reader.bookmark.pageItem", page + 1)) {
+                            reader.goTo(page)
+                        }
+                    }
+                    Divider()
+                    Button(L10n.tr("app.menu.clearBookmarks"), role: .destructive) {
+                        reader.clearBookmarks()
+                    }
+                }
             }
         }
     }
@@ -138,6 +185,18 @@ struct UnrollApp: App {
 
     private func reloadRecents() {
         recentList = recents.entries()
+        progressIndex = RecentProgressIndex(entries: ReadingProgress().allEntries())
+    }
+
+    /// 最近打开的菜单项标题:有续读记录则带上进度(缺总页数的老记录只显示页码)
+    private func recentLabel(for entry: RecentDocuments.Entry) -> String {
+        guard let saved = progressIndex.entry(forDocument: entry.displayName) else {
+            return entry.displayName
+        }
+        guard let total = saved.total, total > 0 else {
+            return L10n.tr("app.menu.recentProgressUnknownTotal", entry.displayName, saved.page + 1)
+        }
+        return L10n.tr("app.menu.recentProgress", entry.displayName, saved.page + 1, total)
     }
 }
 

@@ -48,6 +48,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case fitModeChanged(String)     // fit / width / height / 1to1
     /// 续读恢复:恢复到的页码(只记页索引,不记文件名,§5.10.4)
     case progressRestored(page: Int)
+    /// 书签标记/取消:记页码 + on/off(同样只有页码,无文件名)
+    case bookmarkToggled(page: Int, marked: Bool)
 
     var name: String {
         switch self {
@@ -65,6 +67,7 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .directionChanged: return "directionChanged"
         case .fitModeChanged:   return "fitModeChanged"
         case .progressRestored: return "progressRestored"
+        case .bookmarkToggled:  return "bookmarkToggled"
         }
     }
 
@@ -98,6 +101,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return mode
         case .progressRestored(let page):
             return String(page)
+        case .bookmarkToggled(let page, let marked):
+            return "\(page):\(marked ? "on" : "off")"
         }
     }
 }

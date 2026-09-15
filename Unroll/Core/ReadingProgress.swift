@@ -21,6 +21,9 @@ struct ReadingProgress {
         var direction: String
         var fitMode: String
         var updatedAt: Date
+        /// 文档总页数(菜单展示「P.3/200」用)。
+        /// Optional:旧版本记录里没有这个字段,缺省解成 nil,老数据不丢
+        var total: Int?
     }
 
     private let defaults: UserDefaults
@@ -35,19 +38,32 @@ struct ReadingProgress {
     /// 文档身份键:文件名 + 文件大小
     static func key(name: String, size: Int) -> String { "\(name)|\(size)" }
 
+    /// 从文档键还原文件名(键格式「名字|大小」)。
+    /// 按**最后一个**分隔符切:文件名本身可能含「|」
+    static func documentName(fromKey key: String) -> String {
+        guard let idx = key.lastIndex(of: "|") else { return key }
+        return String(key[key.startIndex..<idx])
+    }
+
     // MARK: - 读
 
     func entry(forKey key: String) -> Entry? {
         map()[key]
     }
 
+    /// 全部进度(展示用:最近打开菜单标注「读到第几页 P.3/200」)。
+    /// 返回键→条目;调用方按 `documentName(fromKey:)` 匹配文件名
+    func allEntries() -> [String: Entry] { map() }
+
     // MARK: - 写
 
-    /// 记录一次进度(每次翻页/换模式都会调;UserDefaults 写入足够廉价)
-    func save(key: String, page: Int, layout: String, direction: String, fitMode: String) {
+    /// 记录一次进度(每次翻页/换模式都会调;UserDefaults 写入足够廉价)。
+    /// `total` 缺省 nil:仅菜单展示用,老调用与老记录都不受影响
+    func save(key: String, page: Int, total: Int? = nil,
+              layout: String, direction: String, fitMode: String) {
         var dict = map()
         dict[key] = Entry(page: page, layout: layout, direction: direction,
-                          fitMode: fitMode, updatedAt: Date())
+                          fitMode: fitMode, updatedAt: Date(), total: total)
         // LRU 上限:超限剔除最旧的条目
         if dict.count > Self.maxEntries {
             let oldest = dict.sorted { $0.value.updatedAt < $1.value.updatedAt }

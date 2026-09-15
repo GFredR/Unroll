@@ -93,4 +93,49 @@ final class ReadingProgressTests: XCTestCase {
         let progress = ReadingProgress(defaults: defaults)
         XCTAssertNil(progress.entry(forKey: "k"))
     }
+
+    // MARK: - 总页数 / 键名还原(2026-09-15:最近打开菜单标注进度)
+
+    /// total 往返一致(菜单要显示 P.当前/总数)
+    func testTotalRoundtrip() {
+        let progress = ReadingProgress(defaults: defaults)
+        progress.save(key: "k", page: 4, total: 200,
+                      layout: "single", direction: "leftToRight", fitMode: "fit")
+
+        XCTAssertEqual(progress.entry(forKey: "k")?.total, 200)
+    }
+
+    /// 老记录(无 total 字段)仍能解出,缺省 nil —— 升级不丢已有进度
+    func testLegacyRecordWithoutTotalDecodesAsNil() {
+        let json = """
+        {"k":{"page":3,"layout":"dual","direction":"leftToRight",\
+        "fitMode":"fit","updatedAt":0}}
+        """
+        defaults.set(Data(json.utf8), forKey: "reading.progress.v1")
+        let progress = ReadingProgress(defaults: defaults)
+
+        let entry = progress.entry(forKey: "k")
+        XCTAssertEqual(entry?.page, 3)
+        XCTAssertNil(entry?.total)
+    }
+
+    /// 键 → 文件名还原(菜单按文件名匹配进度)
+    func testDocumentNameParsedFromKey() {
+        XCTAssertEqual(ReadingProgress.documentName(fromKey: ReadingProgress.key(name: "a.cbz", size: 12)),
+                       "a.cbz")
+        // 文件名本身含分隔符:按最后一个切,名字不被截断
+        XCTAssertEqual(ReadingProgress.documentName(fromKey: "we|ird|1.cbz|99"), "we|ird|1.cbz")
+        // 非法键(无分隔符)= 原样返回,不崩
+        XCTAssertEqual(ReadingProgress.documentName(fromKey: "no-separator"), "no-separator")
+    }
+
+    /// allEntries 暴露全量(菜单据此建索引)
+    func testAllEntriesReturnsEverything() {
+        let progress = ReadingProgress(defaults: defaults)
+        progress.save(key: "a|1", page: 1, layout: "single", direction: "leftToRight", fitMode: "fit")
+        progress.save(key: "b|2", page: 2, layout: "single", direction: "leftToRight", fitMode: "fit")
+
+        XCTAssertEqual(progress.allEntries().count, 2)
+        XCTAssertEqual(progress.allEntries()["b|2"]?.page, 2)
+    }
 }
