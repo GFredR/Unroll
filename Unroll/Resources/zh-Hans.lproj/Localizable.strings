@@ -67,6 +67,7 @@
 "reader.direction.ltr" = "从左往右读";
 "reader.direction.rtl" = "从右往左读(日漫)";
 "app.menu.firstPage" = "回到封面";
+"app.menu.lastPage" = "跳到末页";
 
 /* 缩放档位(⌘3-⌘6) */
 "reader.fit.window" = "适应窗口";

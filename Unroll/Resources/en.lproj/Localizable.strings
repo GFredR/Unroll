@@ -67,6 +67,7 @@
 "reader.direction.ltr" = "Left to Right";
 "reader.direction.rtl" = "Right to Left (Manga)";
 "app.menu.firstPage" = "Back to Cover";
+"app.menu.lastPage" = "Jump to Last Page";
 
 /* Fit modes (⌘3-⌘6) */
 "reader.fit.window" = "Fit Window";

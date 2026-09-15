@@ -12,6 +12,7 @@
 //     故用 NSApplicationDelegateAdaptor 接 AppKit 回调,见 AppLifecycle);
 //     窗口根视图挂 .crashPrompt() 做「上次似乎异常退出」延迟询问(§5.10)。
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 
 @main
@@ -30,6 +31,8 @@ struct UnrollApp: App {
         WindowGroup("app.name") {
             ReaderView(viewModel: reader)
                 .frame(minWidth: 720, minHeight: 480)
+                // 窗口大小/位置记忆:AppKit setFrameAutosaveName 自动持久化并恢复
+                .background(MainWindowSaver())
                 // Finder 双击 / 系统打开方式:文件访问权由系统自动授予(沙盒下同理)
                 .onOpenURL { url in
                     openArchive(url: url)
@@ -60,6 +63,7 @@ struct UnrollApp: App {
                     Divider()
                     Button(L10n.tr("app.menu.clearRecent"), role: .destructive) {
                         recents.clear()
+                        reader.clearProgress()   // 连带清续读进度,不留无主数据
                         reloadRecents()
                     }
                 }
@@ -88,6 +92,10 @@ struct UnrollApp: App {
                     reader.goTo(0)
                 }
                 .keyboardShortcut(.upArrow, modifiers: [.command, .shift])
+                Button(L10n.tr("app.menu.lastPage")) {
+                    reader.goTo(reader.pageCount - 1)
+                }
+                .keyboardShortcut(.downArrow, modifiers: [.command, .shift])
                 Divider()
                 // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上
                 Button(L10n.tr("reader.fit.window")) {
@@ -130,6 +138,24 @@ struct UnrollApp: App {
 
     private func reloadRecents() {
         recentList = recents.entries()
+    }
+}
+
+// MARK: - 窗口大小/位置记忆(v2,2026-09-15)
+
+/// 借 AppKit 的 frameAutosaveName 实现零自管存储:
+/// NSWindow 自动把 frame 写进 UserDefaults(`NSWindow Frame …`),启动时自动恢复。
+/// 隐私上只有窗口几何数据,无任何文档信息。
+private struct MainWindowSaver: NSViewRepresentable {
+
+    func makeNSView(context: Context) -> NSView { AutosaveView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class AutosaveView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            window?.setFrameAutosaveName("UnrollMainWindow")
+        }
     }
 }
 

@@ -98,23 +98,26 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var documentName: String?
     @Published var layout: PageLayout = .single {
         didSet {
-            guard oldValue != layout else { return }
+            guard oldValue != layout, !isRestoringProgress else { return }
             Breadcrumbs.shared.record(.layoutChanged(layout.rawValue))
+            saveProgressNow()
             refreshSecondary()
         }
     }
     @Published var direction: ReadingDirection = .leftToRight {
         didSet {
-            guard oldValue != direction else { return }
+            guard oldValue != direction, !isRestoringProgress else { return }
             Breadcrumbs.shared.record(.directionChanged(direction == .leftToRight ? "ltr" : "rtl"))
+            saveProgressNow()
             refreshSecondary()
         }
     }
     /// 缩放档位(§2.1-4):切换只影响渲染基准,与页面数据无关,不触发加载
     @Published var fitMode: FitMode = .fitWindow {
         didSet {
-            guard oldValue != fitMode else { return }
+            guard oldValue != fitMode, !isRestoringProgress else { return }
             Breadcrumbs.shared.record(.fitModeChanged(fitMode.token))
+            saveProgressNow()
         }
     }
 
@@ -135,6 +138,24 @@ final class ReaderViewModel: ObservableObject {
     /// 部分加密包的加密页数(单页失败卡片的「其余 %d 页可读」用)
     private var encryptedPageCount = 0
 
+    // MARK: - 续读记忆(v2「进度记忆」,2026-09-15)
+
+    private let progressStore: ReadingProgress
+    /// 当前文档的进度键(打开成功后才有;nil = 未在阅读,不落进度)
+    private var progressKey: String?
+    /// 恢复期间不回写进度(否则切档位的 didSet 会用页 0 覆盖掉已存的进度)
+    private var isRestoringProgress = false
+
+    /// progressStore 可注入(单测用隔离 suite)
+    init(progressStore: ReadingProgress = ReadingProgress()) {
+        self.progressStore = progressStore
+    }
+
+    /// 清空全部续读进度(「清空最近打开」连带调用,不留无主进度)
+    func clearProgress() {
+        progressStore.clear()
+    }
+
     // MARK: - 打开(图 3 主时序)
 
     /// 打开归档。重复调用 = 换书:旧 store 先 teardown,新任务不受旧任务干扰。
@@ -151,6 +172,7 @@ final class ReaderViewModel: ObservableObject {
         pageCount = 0
         pageIndex = 0
         encryptedPageCount = 0
+        progressKey = nil          // 旧文档的进度键立即失效,换书后不得误写
         presentation = PagePresentation()
         secondary = nil
         documentName = url.lastPathComponent
@@ -174,16 +196,34 @@ final class ReaderViewModel: ObservableObject {
             }
             phase = .reading
 
+            // 续读键:文件名 + 文件大小(stat 放后台,不占主线程,AGENTS.md 十二.1)
+            let bytes = await fileSize(of: url)
+            progressKey = ReadingProgress.key(name: url.lastPathComponent, size: bytes)
+
             // 面包屑:格式 + 大小桶(不含文件名)/ 页数 / 加密页数(§5.10.4 允许字段)
             Breadcrumbs.shared.record(.openArchive(format: Self.formatToken(document.format),
-                                                   sizeBucket: await sizeBucket(of: url)))
+                                                   sizeBucket: Breadcrumbs.sizeBucket(bytes: bytes)))
             Breadcrumbs.shared.record(.indexBuilt(pages: document.entries.count))
             if encryptedPageCount > 0 {
                 Breadcrumbs.shared.record(.encryptedPages(count: encryptedPageCount))
             }
 
-            await loadPage(0)
-            await store.anchorDidChange(to: 0)
+            // 续读恢复:有记录 → 套用阅读模式 + 跳到上次页码;无记录 → 从封面开始
+            var startPage = 0
+            if let key = progressKey, let saved = progressStore.entry(forKey: key),
+               document.entries.indices.contains(saved.page), saved.page > 0 {
+                isRestoringProgress = true
+                if let l = PageLayout(rawValue: saved.layout) { layout = l }
+                if let d = ReadingDirection(rawValue: saved.direction) { direction = d }
+                if let f = FitMode(rawValue: saved.fitMode) { fitMode = f }
+                isRestoringProgress = false
+                startPage = saved.page
+                pageIndex = startPage    // 状态机页码同步(翻页语义全走 goTo,这里是对齐)
+                Breadcrumbs.shared.record(.progressRestored(page: startPage))
+            }
+
+            await loadPage(startPage)
+            await store.anchorDidChange(to: startPage)
         } catch is CancellationError {
             // 被更新的 open 抢占:不做任何状态写入,别覆盖新任务的结果
         } catch let error as ArchiveError {
@@ -204,6 +244,7 @@ final class ReaderViewModel: ObservableObject {
         guard clamped != pageIndex || presentation.failure != nil else { return }
 
         pageIndex = clamped
+        saveProgressNow()
         presentation.failure = nil
         presentation.isLoading = true
         secondary = nil   // 旧次页已失效,留白待新次页(不垫旧图,视觉上是「下一摊」)
@@ -291,13 +332,22 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    /// 文件大小 → 区间桶(§5.10.4:只记桶,绝不记精确大小,更不记路径)。
-    /// stat 放后台,不占主线程(AGENTS.md 十二.1)
-    private func sizeBucket(of url: URL) async -> String {
-        let bytes = await Task.detached(priority: .utility) {
+    /// 文件大小(字节)。stat 放后台,不占主线程(AGENTS.md 十二.1);
+    /// 续读键与面包屑大小桶共用这一次 stat
+    private func fileSize(of url: URL) async -> Int {
+        await Task.detached(priority: .utility) {
             (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
         }.value
-        return Breadcrumbs.sizeBucket(bytes: bytes)
+    }
+
+    /// 回写续读进度(仅在阅读态且有进度键时;失败静默 —— 续读绝不致命)
+    private func saveProgressNow() {
+        guard phase == .reading, let key = progressKey, !isRestoringProgress else { return }
+        progressStore.save(key: key,
+                           page: pageIndex,
+                           layout: layout.rawValue,
+                           direction: direction.rawValue,
+                           fitMode: fitMode.rawValue)
     }
 
     // MARK: - 错误 → 文案 key(§5.9.3.1 分流)

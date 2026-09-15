@@ -46,6 +46,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case layoutChanged(String)      // single / dual
     case directionChanged(String)   // ltr / rtl
     case fitModeChanged(String)     // fit / width / height / 1to1
+    /// 续读恢复:恢复到的页码(只记页索引,不记文件名,§5.10.4)
+    case progressRestored(page: Int)
 
     var name: String {
         switch self {
@@ -62,6 +64,7 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .layoutChanged:    return "layoutChanged"
         case .directionChanged: return "directionChanged"
         case .fitModeChanged:   return "fitModeChanged"
+        case .progressRestored: return "progressRestored"
         }
     }
 
@@ -93,6 +96,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return direction
         case .fitModeChanged(let mode):
             return mode
+        case .progressRestored(let page):
+            return String(page)
         }
     }
 }

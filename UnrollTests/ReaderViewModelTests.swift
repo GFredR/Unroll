@@ -10,11 +10,33 @@ import XCTest
 @MainActor
 final class ReaderViewModelTests: XCTestCase {
 
+    // MARK: - 测试隔离
+
+    /// 进度存储固定用一个独立 suite,并在每个 VM 创建前清空。
+    /// **必须隔离**:续读会持久化「上次读到第几页」,若走宿主 App 的真实偏好,
+    /// 单测之间会互相污染(前一个用例翻到第 2 页,后一个用例一打开就被恢复过去)。
+    private static let suiteName = "test.readervm.progress"
+
+    /// reuseProgress = true 时保留已有进度(专供「续读恢复」用例模拟重开)
+    private func makeViewModel(reuseProgress: Bool = false) -> ReaderViewModel {
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        if !reuseProgress { defaults.removePersistentDomain(forName: Self.suiteName) }
+        return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults))
+    }
+
+    private func progressStore() -> ReadingProgress {
+        ReadingProgress(defaults: UserDefaults(suiteName: Self.suiteName) ?? .standard)
+    }
+
+    private func cleanProgress() {
+        UserDefaults(suiteName: Self.suiteName)?.removePersistentDomain(forName: Self.suiteName)
+    }
+
     // MARK: - 失败分支(绝不闪退,§5.9.4)
 
     /// 垃圾文件 → .failed + corrupted 文案组
     func testOpenGarbageFileFailsWithCorruptedCopy() async throws {
-        let vm = ReaderViewModel()
+        let vm = makeViewModel()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("unroll-garbage-\(UUID().uuidString).bin")
         try Data("this is definitely not an archive".utf8).write(to: url)
@@ -32,7 +54,7 @@ final class ReaderViewModelTests: XCTestCase {
 
     /// 不存在的文件 → 同 corrupted 组(openRawHandle 打不开即 .corrupted)
     func testOpenMissingFileFails() async throws {
-        let vm = ReaderViewModel()
+        let vm = makeViewModel()
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("unroll-missing-\(UUID().uuidString).cbz")
 
@@ -48,7 +70,7 @@ final class ReaderViewModelTests: XCTestCase {
 
     /// 初始态:noDocument、空呈现
     func testInitialState() {
-        let vm = ReaderViewModel()
+        let vm = makeViewModel()
         XCTAssertEqual(vm.phase, .noDocument)
         XCTAssertEqual(vm.pageCount, 0)
         XCTAssertEqual(vm.pageIndex, 0)
@@ -58,7 +80,7 @@ final class ReaderViewModelTests: XCTestCase {
 
     /// 换书语义:再次 open 时旧任务被取消,最终状态由新任务决定
     func testReopenReplacesPreviousState() async throws {
-        let vm = ReaderViewModel()
+        let vm = makeViewModel()
         let garbage = FileManager.default.temporaryDirectory
             .appendingPathComponent("unroll-garbage-\(UUID().uuidString).bin")
         try Data("junk".utf8).write(to: garbage)
@@ -115,7 +137,7 @@ final class ReaderViewModelTests: XCTestCase {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
         }
-        let vm = ReaderViewModel()
+        let vm = makeViewModel()
         await vm.open(url: url).value
         guard case .reading = vm.phase, vm.pageCount >= 2 else {
             throw XCTSkip("fixture 未进入 reading 态或页数不足(plain.cbz 有 3 页)")
@@ -154,5 +176,85 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(vm.pageIndex, 0, "切方向不得跳页")
         vm.nextPage()
         XCTAssertEqual(vm.pageIndex, 1, "前进语义与方向无关,恒 +1(文档序)")
+    }
+
+    // MARK: - 续读记忆(v2「进度记忆」,2026-09-15)
+
+    /// 打开 → 翻页/换模式 → 换一个 VM(同一进度存储)重开 → 页码与模式全部恢复
+    func testResumeRestoresPageAndModes() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+
+        // 第一次阅读:翻到第 2 页,双页 + 右开 + 适应宽
+        let first = makeViewModel()
+        await first.open(url: url).value
+        guard case .reading = first.phase else {
+            return XCTFail("首次打开应进入 reading")
+        }
+        first.layout = .dual
+        first.direction = .rightToLeft
+        first.fitMode = .fitWidth
+        first.goTo(2)
+
+        // 重开(模拟退出后再看同一本):页码与三个模式应恢复
+        let second = makeViewModel(reuseProgress: true)
+        await second.open(url: url).value
+        guard case .reading = second.phase else {
+            return XCTFail("重开应进入 reading")
+        }
+        XCTAssertEqual(second.pageIndex, 2, "应恢复到上次阅读的页")
+        XCTAssertEqual(second.layout, .dual)
+        XCTAssertEqual(second.direction, .rightToLeft)
+        XCTAssertEqual(second.fitMode, .fitWidth)
+    }
+
+    /// 恢复页码越界(文档变小 / 进度来自别处)时必须夹紧,不得落进非法页
+    func testResumeClampsOutOfRangePage() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        cleanProgress()
+        let progress = progressStore()
+
+        // 手工塞一条越界进度(页 99,文档只有 3 页)
+        let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        progress.save(key: ReadingProgress.key(name: url.lastPathComponent, size: size),
+                      page: 99, layout: "dual", direction: "rightToLeft", fitMode: "fitWidth")
+
+        let vm = makeViewModel(reuseProgress: true)
+        await vm.open(url: url).value
+        guard case .reading = vm.phase else {
+            return XCTFail("打开应进入 reading")
+        }
+        XCTAssertLessThan(vm.pageIndex, vm.pageCount, "越界进度必须被夹紧")
+        XCTAssertEqual(vm.pageIndex, 0, "越界记录应被当作「无进度」")
+        XCTAssertEqual(vm.pageCount, 3)
+    }
+
+    /// 从未翻页 → 不留进度记录(免得多出无意义的条目)
+    func testFreshDocumentLeavesNoProgressWhenPageZero() async throws {
+        _ = try await openFixtureOrSkip()   // 打开后停在封面,不做任何翻页
+        let saved = progressStore().entry(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                     size: fixtureSize("plain.cbz")))
+        XCTAssertNil(saved, "未翻页就不该落进度")
+    }
+
+    /// 「清空最近打开」连带清进度
+    func testClearProgressWipesStore() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.goTo(1)
+        XCTAssertNotNil(progressStore().entry(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                        size: fixtureSize("plain.cbz"))))
+        vm.clearProgress()
+        XCTAssertNil(progressStore().entry(forKey: ReadingProgress.key(name: "plain.cbz",
+                                                                     size: fixtureSize("plain.cbz"))))
+    }
+
+    private func fixtureSize(_ name: String) -> Int {
+        let path = Self.fixturesDir.appendingPathComponent(name).path
+        return (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
     }
 }
