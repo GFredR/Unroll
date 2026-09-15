@@ -7,8 +7,15 @@
 // 上限 10 条,不含任何缩略图(隐私:不落盘文件内容,只存 URL 书签)。
 //
 // 存储格式:UserDefaults 里一个 Data 数组,每项是 [书签数据 + name] 的 JSON。
-// 旧书签文件被移动/删除 → 解析或 startAccess 失败 → 条目静默剔除(§5.9.4 同款
+// 旧书签文件被移动/删除 → 解析或 startAccess 失败 → 不打致命错(§5.9.4
 // 「坏条目不致命」原则)。全链路 try?,面包屑级容错:任何失败都不影响打开主流程。
+//
+// 失效条目处理(2026-09-15 修订):原先只在点击时静默剔除,用户视角是
+// 「菜单项无声消失,不知道发生了什么」。现改为两段式:
+//   ① `unresolvableIDs()` 探测标记 —— 低频时机(启动/打开文件)调用,
+//      菜单项带「找不到文件」后缀,点之前就能看出;
+//   ② 点击仍失败才真剔除,并由 App 层弹一句说明。
+// 探测与清理分离:`unresolvableIDs()` 是只读的,删不删由调用方决定。
 import Foundation
 
 struct RecentDocuments {
@@ -99,6 +106,39 @@ struct RecentDocuments {
     /// 与 resolve 配对(没有对应 startAccess 时调用也无害)
     func stopAccess(_ url: URL) {
         url.stopAccessingSecurityScopedResource()
+    }
+
+    /// 探测失效条目:书签解析不出可访问 URL(文件被移走/删除)。
+    ///
+    /// **只读**:不改动已存列表(连 stale 书签的刷新都不做);删不删由调用方决定
+    /// (UI 要先让用户看见标记)。成本:每条解析一次书签并 startAccess/stopAccess
+    /// 配对(净计数不变,不影响正在阅读的文件的访问权)。故意不做缓存 —— 调用点
+    /// 只有「启动」这类低频时机;翻页刷新走 `entries()` 不探测。
+    func unresolvableIDs() -> Set<UUID> {
+        var stale: Set<UUID> = []
+        for entry in entries() {
+            if let url = resolveQuietly(entry) {
+                stopAccess(url)
+            } else {
+                stale.insert(entry.id)
+            }
+        }
+        return stale
+    }
+
+    /// 探测专用解析:**不产生任何副作用** —— 不挂载网络卷、不弹授权 UI。
+    /// 与 `resolve`(用户主动点击时的重开,允许挂载/允许系统 UI)分开:
+    /// 启动时替用户去挂载网络卷或弹认证框是不能接受的。
+    private func resolveQuietly(_ entry: Entry) -> URL? {
+        var isStale = false
+        guard let url = try? URL(resolvingBookmarkData: entry.bookmark,
+                                 options: [.withSecurityScope, .withoutMounting, .withoutUI],
+                                 relativeTo: nil,
+                                 bookmarkDataIsStale: &isStale),
+              url.startAccessingSecurityScopedResource() else {
+            return nil
+        }
+        return url
     }
 
     /// 剔除单条(书签失效时菜单点击后清理)

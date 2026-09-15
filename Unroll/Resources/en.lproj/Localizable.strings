@@ -99,6 +99,16 @@
 "reader.jump.go" = "Go";
 "reader.jump.cancel" = "Cancel";
 
+/* ============ v2 additions: stale "Open Recent" entries (2026-09-15) ============ */
+
+/* Menu item suffix when the file can no longer be found (visible before clicking) */
+"app.menu.recentMissingSuffix" = " (missing)";
+
+/* Shown after clicking a stale entry — no more silent disappearance */
+"app.alert.recentMissing.title" = "File Not Found";
+"app.alert.recentMissing.message" = "\"%@\" has been moved or deleted. It has been removed from Open Recent.";
+"app.alert.ok" = "OK";
+
 /* ============ M4: Voluntary crash report (§5.10) ============ */
 
 /* Wording stays soft: never claim "it crashed" — it may just have been force-quit */

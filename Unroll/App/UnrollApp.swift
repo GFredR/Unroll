@@ -24,6 +24,10 @@ struct UnrollApp: App {
     @State private var recentList: [RecentDocuments.Entry] = []
     /// 文件名 → 续读条目(菜单标注「读到第几页」用;与 recentList 同步刷新)
     @State private var progressIndex = RecentProgressIndex(entries: [:])
+    /// 探测出的失效条目 id(菜单标「找不到文件」用,2026-09-15)
+    @State private var staleRecentIDs: Set<UUID> = []
+    /// 点击失效条目后的说明(非 nil → 弹一句,不再无声消失)
+    @State private var missingRecentName: String?
 
     /// M4:崩溃采集的会话标记要靠 AppKit 生命周期回调闭合
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
@@ -39,11 +43,19 @@ struct UnrollApp: App {
                 .onOpenURL { url in
                     openArchive(url: url)
                 }
-                .onAppear { reloadRecents() }
+                .onAppear { reloadRecents(probe: true) }
                 // 翻页后刷新进度索引:最近打开菜单里的「P.3/200」要跟得上阅读位置
                 .onChange(of: reader.pageIndex) { _, _ in reloadRecents() }
                 // M4:启动 1.5s 后自检「上次是否异常退出」,是则问一次(§5.10.5-①)
                 .crashPrompt()
+                // 2026-09-15:失效的最近条目点击后不只剔除,还要说清原因
+                .alert(L10n.tr("app.alert.recentMissing.title"),
+                       isPresented: Binding(get: { missingRecentName != nil },
+                                            set: { if !$0 { missingRecentName = nil } })) {
+                    Button(L10n.tr("app.alert.ok"), role: .cancel) { missingRecentName = nil }
+                } message: {
+                    Text(L10n.tr("app.alert.recentMissing.message", missingRecentName ?? ""))
+                }
         }
         .windowStyle(.automatic)
         .commands {
@@ -173,30 +185,49 @@ struct UnrollApp: App {
         reader.open(url: url)
     }
 
-    /// 最近打开:书签解析(沙盒重授权)成功才打开;失效条目当场剔除
+    /// 最近打开:书签解析(沙盒重授权)成功才打开;失效条目剔除 + **说一句**
+    /// (2026-09-15:原先静默 return,菜单项无声消失,用户不知道发生了什么)
     private func openRecent(_ entry: RecentDocuments.Entry) {
         guard let url = recents.resolve(entry) else {
             recents.remove(entry)
+            staleRecentIDs.remove(entry.id)
             reloadRecents()
+            missingRecentName = entry.displayName
             return
         }
+        // 真的打开了 → 撤销本次会话里的失效标记(探测不挂载网络卷,可能误判;
+        // 这里以「实际打开成功」为准,避免标记与事实打架)
+        staleRecentIDs.remove(entry.id)
         openArchive(url: url)
     }
 
-    private func reloadRecents() {
+    /// 刷新菜单列表。`probe` = 顺带探测失效条目(要解析每条书签,较贵)——
+    /// 只在启动时开一次;翻页触发的高频刷新只读列表,不探测(也不在用户背后
+    /// 挂载网络卷或弹授权框,探测走 `resolveQuietly`)。
+    private func reloadRecents(probe: Bool = false) {
         recentList = recents.entries()
         progressIndex = RecentProgressIndex(entries: ReadingProgress().allEntries())
+        if probe {
+            staleRecentIDs = recents.unresolvableIDs()
+        }
     }
 
-    /// 最近打开的菜单项标题:有续读记录则带上进度(缺总页数的老记录只显示页码)
+    /// 最近打开的菜单项标题:有续读记录则带上进度(缺总页数的老记录只显示页码);
+    /// 探测出文件已不在的条目补一句「找不到文件」,点之前就能看出来
     private func recentLabel(for entry: RecentDocuments.Entry) -> String {
-        guard let saved = progressIndex.entry(forDocument: entry.displayName) else {
-            return entry.displayName
+        let base: String
+        if let saved = progressIndex.entry(forDocument: entry.displayName) {
+            if let total = saved.total, total > 0 {
+                base = L10n.tr("app.menu.recentProgress", entry.displayName, saved.page + 1, total)
+            } else {
+                base = L10n.tr("app.menu.recentProgressUnknownTotal", entry.displayName, saved.page + 1)
+            }
+        } else {
+            base = entry.displayName
         }
-        guard let total = saved.total, total > 0 else {
-            return L10n.tr("app.menu.recentProgressUnknownTotal", entry.displayName, saved.page + 1)
-        }
-        return L10n.tr("app.menu.recentProgress", entry.displayName, saved.page + 1, total)
+        return staleRecentIDs.contains(entry.id)
+            ? base + L10n.tr("app.menu.recentMissingSuffix")
+            : base
     }
 }
 
