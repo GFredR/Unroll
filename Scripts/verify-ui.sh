@@ -157,20 +157,26 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "crash" ]; then
     quit_app
     SUPPRESSED="$(sed -n 's/.*"suppressedVersion":"\([^"]*\)".*/\1/p' "$SESSION" 2>/dev/null)"
     if [ -z "$SUPPRESSED" ]; then
-        info "弹窗未被人处理过(没有 suppressedVersion),跳过该验证"
-        info "如需验证:手动点一次弹窗的「不再询问」后重跑本脚本"
+        # 没人点过弹窗时**自己注入** suppressedVersion,而不是干等。
+        # 分工:「取消按钮 → 写 suppressedVersion」由 CrashReporterTests 单测覆盖;
+        # 这里要验的是端到端行为 —— 标了 suppressed 之后系统是不是真的不再问。
+        # 靠人手点的话,这一项就永远停在"等人",等于没验。
+        info "弹窗未被处理过 —— 注入 suppressedVersion=$VERSION 后验证"
+        BOOT2="$(sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+), usec = ([0-9]+).*/\1.\2/')"
+        printf '{"alive":true,"version":"%s","build":"%s","bootTime":%s,"suppressedVersion":"%s"}' \
+            "$VERSION" "$VERSION" "$BOOT2" "$VERSION" > "$SESSION"
+        SUPPRESSED="$VERSION"
+    fi
+    open -a "$APP"
+    AGAIN=""
+    for i in $(seq 1 12); do
+        [ "$(unroll_windows | grep -c .)" -ge 2 ] && AGAIN="yes"
+        sleep 0.4
+    done
+    if [ -z "$AGAIN" ]; then
+        ok "同版本($SUPPRESSED)不再弹窗 —— 免打扰生效"
     else
-        open -a "$APP"
-        AGAIN=""
-        for i in $(seq 1 12); do
-            [ "$(unroll_windows | grep -c .)" -ge 2 ] && AGAIN="yes"
-            sleep 0.4
-        done
-        if [ -z "$AGAIN" ]; then
-            ok "同版本($SUPPRESSED)不再弹窗 —— 免打扰生效"
-        else
-            bad "suppressedVersion=$SUPPRESSED 时仍然弹窗了"
-        fi
+        bad "suppressedVersion=$SUPPRESSED 时仍然弹窗了"
     fi
 fi
 
