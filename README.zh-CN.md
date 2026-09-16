@@ -22,6 +22,7 @@
 - **单实例顺序扫描**——所有页面走一遍流式扫描，第 200 页的代价与第 1 页基本相同。反面做法（每页重新打开一次归档）在 solid 7z 上是平方级退化：实测 150 页时慢 **71 倍**，且包越大越糟。
 - **带像素预算的页缓存**——内存里最多保留 8 页全分辨率图、总计不超过 2 亿像素。被淘汰的页先降级成 1600px 缩略图而不是直接丢掉，所以往回翻是瞬间出图，不需要重新解码。
 - **单页 / 双页对开，含日漫右开**——对开模式一次前进两页；切换左右开只改变视觉镜像，不会让你的阅读位置跳掉。**封面单独一页**（`⌥⌘C`）对应日式单行本的排版：封面自己一屏，之后才是 1-2 / 3-4 的对开；默认关闭，因为并非每个 cbz 都按单行本排版。
+- **Finder 集成（QuickLook）**——在 Finder 里选中归档按空格，不开 App 就能看到封面与总页数；文件图标也直接是封面，不再是通用压缩包图标。因为 macOS 规定一个 `.appex` 只能声明一个扩展点，这里做成**两个**扩展（缩略图 + 预览）。加密或读不出来的归档**刻意退回系统默认图标**，而不是挂一张误导性的占位图。只认 `cbz / cbr / cb7 / cbt`——裸 `.zip` 不碰，普通压缩包不会被路由到开卷。
 - **纯键盘可用**——所有操作都不用碰鼠标。
 - **HUD 浮层**——显示文件名、页码与进度条，静止 2.5 秒后淡出。
 - **最近打开**——保留最近 10 个归档，用 security-scoped bookmark 记住，沙盒下也能重新打开。菜单里只显示文件名。
@@ -88,6 +89,14 @@ xattr -dr com.apple.quarantine /Applications/Unroll.app
 
 装好后，`.cbz / .cbr / .cb7 / .cbt` 双击即用开卷打开。普通 `.zip` 只在「打开」面板里提供——开卷不会抢占系统对 ZIP 的默认关联。
 
+两个 QuickLook 扩展就在 App 包内，把 `Unroll.app` 放进「应用程序」后会自动被系统识别。如果按空格仍然只看到通用图标，去**系统设置 → 通用 → 登录项与扩展 → 快速查看**里确认开卷是打开的。想逐段排查是哪一环断了：
+
+```bash
+./Scripts/verify-quicklook.sh --install
+```
+
+（它会依次检查包内扩展、嵌套签名、PlugInKit 注册，最后真的让系统渲染一张缩略图。注意：只能在普通终端里跑，受限/沙箱环境里会被脚本自己拦下。）
+
 ## 构建与运行
 
 需要最新版 Xcode 与 [xcodegen](https://github.com/yonaskolb/XcodeGen)（`brew install xcodegen`）。
@@ -148,7 +157,8 @@ cd ArchiveKit && swift test
 - **RAR 4 未验证**——RAR 5 已用真实样本测过，RAR 4 还没测。
 - **超大的 solid 7z 包**每页约需 90ms 的 LZMA2 解压。预读机制就是为了把这个代价藏起来，但在巨大的 solid 包里做远距离跳页，代价是真实且肉眼可见的。
 - **续读与书签按「文件名 + 文件大小」认档**——把文件改名（或改了内容导致大小变化）后会被当成另一本，进度与书签不会跟过去。这是"只存文件名、不存路径"的代价。
-- **未做公证**——仅 ad-hoc 签名，所以首次打开要走上面那一步绕行。
+- **未做公证**——仅 ad-hoc 签名，所以首次打开要走上面那一步绕行。这条同样适用于包内的两个 QuickLook 扩展：如果在别的机器上按空格毫无反应，先怀疑它们（macOS 对"加载第三方扩展"比"启动一个 App"更严）。具体卡在哪一环，`Scripts/verify-quicklook.sh` 会逐项报出来。
+- **QuickLook 预览只显示首页**，面板里不能翻页——那等于在一个不吃键盘事件的面板里重造一个阅读器。真正翻页阅读仍然回到 App。
 - **v1 仅支持 macOS。** 归档引擎刻意做成独立的 SwiftPM 包（`ArchiveKit`），就是为了以后再出 iOS / iPadOS 版本时能直接复用。
 
 ## 工程结构
@@ -161,9 +171,11 @@ Unroll/
 │   ├── Core/       # 页存储与缓存、设计系统、最近打开、诊断
 │   └── Resources/  # 中英文案、Asset Catalog
 ├── ArchiveKit/     # 本地 SPM 包——归档读取,不含 UI(可复用)
+├── UnrollQuickLook/        # 两个 QuickLook 扩展:Thumbnail/ + Preview/,Shared/ 共用读首页
 ├── UnrollTests/            # 宿主为 App 的单元测试
 ├── UnrollLogicTests/       # 纯逻辑快车道测试
-├── Scripts/        # regen / build-app / make-dmg / 演示素材 / GIF 录制
+├── UnrollQuickLookTests/   # 扩展共享读取逻辑的测试
+├── Scripts/        # regen / build-app / make-dmg / verify-quicklook / 演示素材 / GIF 录制
 └── project.yml     # xcodegen 唯一真源
 ```
 

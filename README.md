@@ -22,6 +22,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **A single sequential scanner** — pages are pulled through one streaming pass, so page 200 costs about the same as page 1. The naive alternative (reopening the archive per page) degrades quadratically on solid 7z archives: measured **71× slower** at 150 pages, and getting worse as the archive grows.
 - **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
 - **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position. **Cover on its own page** (`⌥⌘C`) matches how a manga volume is actually bound: the cover stands alone, then 1-2 / 3-4 pair up. Off by default, since not every cbz is laid out as a bound volume.
+- **Quick Look integration** — press `Space` on an archive in Finder to see its cover and page count without opening the app, and let Finder show the actual cover as the file icon instead of a generic archive glyph. It ships as **two** bundled extensions (thumbnail + preview), because macOS allows exactly one extension point per `.appex`. Encrypted or unreadable archives deliberately fall back to the system icon rather than a misleading placeholder. Only `cbz / cbr / cb7 / cbt` are claimed — plain `.zip` is left alone, so ordinary ZIP files never route through Unroll.
 - **Keyboard-first** — every action is reachable without touching the mouse.
 - **HUD overlay** — filename, page number and a progress bar; fades out 2.5 s after you stop moving.
 - **Recent documents** — the last 10 archives, remembered with security-scoped bookmarks so the sandbox can reopen them. The menu lists file names only, and shows how far you got in each one.
@@ -88,6 +89,14 @@ or **right-click** `Unroll.app` → **Open** → confirm.
 
 Once installed, `.cbz / .cbr / .cb7 / .cbt` files open in Unroll on double-click. Plain `.zip` is only offered inside the Open panel — Unroll never takes over the system's default handler for ZIP.
 
+The two Quick Look extensions live inside the app bundle and are picked up automatically once `Unroll.app` is in **Applications**. If pressing `Space` still shows a generic icon instead of a cover, open **System Settings → General → Login Items & Extensions → Quick Look** and make sure Unroll is switched on. To diagnose it stage by stage, run:
+
+```bash
+./Scripts/verify-quicklook.sh --install
+```
+
+(it checks the bundle, the nested signatures, PlugInKit registration, and finally asks the system to render a real thumbnail — and only works in a normal terminal, not inside a sandboxed environment).
+
 ## Build & run
 
 Requirements: the latest Xcode and [xcodegen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
@@ -147,7 +156,8 @@ Crash reporting is **opt-in and manual**. If the app was killed or quit abnormal
 - **RAR 4 is unverified** — RAR 5 has been tested against real samples; RAR 4 has not.
 - **Very large solid 7z archives** cost roughly 90 ms of LZMA2 decompression per page. Prefetching is designed to hide that, but jumping far ahead in a huge solid archive has a real, visible cost.
 - **Resume and bookmarks identify an archive by "file name + file size"** — rename the file, or change its contents so the size differs, and it counts as a different archive: your progress and bookmarks stay behind. That is the price of never storing a path.
-- **Not notarized** — ad-hoc signing only, hence the first-launch Gatekeeper step above.
+- **Not notarized** — ad-hoc signing only, hence the first-launch Gatekeeper step above. This applies to the bundled Quick Look extensions too: if `Space` does nothing on another machine, they are the first thing to suspect (macOS is stricter about loading third-party extensions than about launching an app). `Scripts/verify-quicklook.sh` reports exactly which stage fails.
+- **Quick Look previews show the first page only.** No paging inside the preview panel — that would mean rebuilding the reader inside a panel that doesn't take keyboard input. Reading still happens in the app.
 - **macOS only in v1.** The archive engine is kept as a standalone SwiftPM package (`ArchiveKit`) specifically so an iOS / iPadOS build can reuse it later.
 
 ## Project layout
@@ -160,9 +170,11 @@ Unroll/
 │   ├── Core/       # Page store & cache, design system, recents, diagnostics
 │   └── Resources/  # en / zh-Hans strings, asset catalog
 ├── ArchiveKit/     # Local SwiftPM package — archive reading, zero UI (reusable)
+├── UnrollQuickLook/        # Two Quick Look extensions: Thumbnail/ + Preview/, Shared/ page reader
 ├── UnrollTests/            # App-hosted unit tests
 ├── UnrollLogicTests/       # Fast logic-only tests
-├── Scripts/        # regen / build-app / make-dmg / demo sample / GIF recording
+├── UnrollQuickLookTests/   # Tests for the extensions' shared page-reading logic
+├── Scripts/        # regen / build-app / make-dmg / verify-quicklook / demo sample / GIF recording
 └── project.yml     # xcodegen source of truth
 ```
 

@@ -7,6 +7,7 @@ Unroll is small enough to read in an afternoon, but a handful of decisions carry
 ```mermaid
 flowchart TB
     UI["Unroll.app<br/>SwiftUI reader, menus, HUD, diagnostics"]
+    QL["UnrollQuickLook<br/>two .appex: thumbnail + preview<br/>first page only, no index"]
     Store["PageStore actor<br/>prefetch, LRU cache, pixel budget"]
     Kit["ArchiveKit<br/>SwiftPM package, zero UI"]
     Shim["CArchiveShim<br/>~60 lines of hand-written header"]
@@ -14,15 +15,17 @@ flowchart TB
 
     UI --> Store
     Store --> Kit
+    QL --> Kit
     Kit --> Shim
     Shim --> Lib
 ```
 
-The split is not cosmetic. `ArchiveKit` knows nothing about SwiftUI, AppKit or the reader's needs, so it can be reused as-is by an iOS or iPadOS build — and it is tested on its own, without launching an app.
+The split is not cosmetic. `ArchiveKit` knows nothing about SwiftUI, AppKit or the reader's needs, so it can be reused as-is by an iOS or iPadOS build — and it is tested on its own, without launching an app. The Quick Look extensions go straight to `ArchiveKit` too, skipping `PageStore` entirely: `PageStore` exists to prefetch and cache *consecutive* pages, which is exactly what a thumbnail provider must not do.
 
 | Layer | Responsibility | Depends on |
 | --- | --- | --- |
 | `Unroll.app` | Views, menus, keyboard, HUD, recents, crash diagnostics | `PageStore` |
+| `UnrollQuickLook` | Two Quick Look extensions: read page 1 within a pixel budget, report encrypted / unreadable honestly | `ArchiveKit` |
 | `PageStore` | Prefetching (±2 pages), cache eviction, decode scheduling | `ArchiveKit` |
 | `ArchiveKit` | Format detection, natural sort, sequential page reading | `CArchiveShim` |
 | `CArchiveShim` | Bridges the `archive.h` that the macOS SDK does not export | `libarchive` |
@@ -90,6 +93,24 @@ A failure in the probe is therefore advisory, never destructive: the menu item i
 
 ---
 
+## Decision 6 — Two Quick Look extensions, sharing source rather than a framework
+
+**The problem.** An archive reader that only reveals itself after you open it is invisible in Finder. The single highest-leverage visibility feature is showing the archive's own cover as the file icon and in the `Space` preview — no app launch, no library, no import step.
+
+**The constraint.** macOS allows exactly **one** extension point per `.appex`. Thumbnails (`com.apple.quicklook.thumbnail`) and previews (`com.apple.quicklook.preview`) are two different extension points, so two targets are mandatory — there is no single-extension design available.
+
+**What was chosen.** Two appex targets, both embedded in `Contents/PlugIns/`, both signed inner-to-outer before the app itself. The page-reading logic lives in `UnrollQuickLook/Shared/` and is **compiled into both targets** rather than extracted into a shared framework — a few hundred bytes of duplication is a better trade than a third binary to sign, version and validate.
+
+**Three decisions inside the extensions matter more than the plumbing:**
+
+- **First page only, no index.** Finder calls a thumbnail provider dozens of times for one window full of files. Anything resembling a full archive scan is off the table, and `SequentialPageReader` — the single streaming scanner the reader uses — is deliberately *not* used here, because it is built for consecutive paging, not one-shot reads.
+- **A pixel budget on the way out.** The first page of a scanned volume can be 4000×6000. Decoding it at full size to draw a Finder icon wastes tens of megabytes per file, so decoding goes through ImageIO's thumbnail path, with the EXIF transform applied — a "comic" made of phone photos is otherwise sideways.
+- **Failure returns *nothing*, on purpose.** The result is a three-state enum (`page` / `encrypted` / `unreadable`), and the thumbnail provider answers `(nil, nil)` for both failure states. That is Quick Look's legitimate "this extension produces no thumbnail" signal, and Finder falls back to its generic icon. Drawing a lock badge on every encrypted archive was considered and rejected: it carries less information than the default icon, and it makes a perfectly fine archive look broken. The preview panel, which the user explicitly asked for, is the place where encrypted and damaged are told apart.
+
+Only `cbz / cbr / cb7 / cbt` are claimed. Bare `.zip` is deliberately excluded even though the app can read it: claiming it would route every ordinary ZIP in the system through a comic reader that will show "cannot preview" for most of them.
+
+---
+
 ## What was deliberately not built
 
 An architecture is partly defined by its refusals. Each of these was considered and rejected, not overlooked:
@@ -102,6 +123,8 @@ An architecture is partly defined by its refusals. Each of these was considered 
 | Custom `signal` handlers for crash capture | Fragile, and the payoff over the abnormal-exit self-check is small relative to the risk of making a crash worse. |
 | Extracting archives to disk | The entire premise. Extraction is what this app exists to avoid. |
 | iOS / iPadOS build (v1) | A second product, not a port. `ArchiveKit` is kept UI-free specifically so this stays possible later without a rewrite. |
+| Paging inside the Quick Look preview panel | That means rebuilding the reader inside a panel that does not accept keyboard events and that the host reclaims on a timeout. The preview shows the cover and the page count; reading stays in the app. |
+| A placeholder thumbnail for encrypted / unreadable archives | A lock badge on every encrypted archive carries less information than Finder's default icon, and implies the archive itself is at fault. Falling back to the system icon is the honest answer. |
 
 ## Testing shape
 
@@ -111,6 +134,9 @@ The suite is split by what it needs to run, so that fast feedback stays fast:
 | --- | --- | --- | --- |
 | `ArchiveKit` (SwiftPM) | No | 40 | Format handling, natural sort, sequential reads, byte-exact fixture comparisons |
 | `UnrollLogicTests` | No | 5 | The reader's contract against `ArchiveKit`, run in milliseconds |
+| `UnrollQuickLookTests` | No | 11 | The Quick Look extensions' page-reading logic: first-page selection, downsampling limits, and the full failure-state mapping |
 | `UnrollTests` (app-hosted) | Yes | 91 | View model logic, layout/direction, progress and bookmark persistence, recents, localisation keys |
+
+One boundary is worth stating explicitly, because it is a real gap rather than an oversight: the extensions' **logic** is covered above, but **whether the system actually calls them** cannot be verified headlessly — an `.appex` is launched on demand by Quick Look, and in a restricted environment even `pluginkit -m` is refused and `qlmanage` cannot run. What *is* checked automatically is static correctness (extension point, architectures, nested signature, claimed UTIs). The end-to-end step is delegated to `Scripts/verify-quicklook.sh`, which must be run in a normal login session.
 
 Fixtures are generated by a script, are deterministic, and are committed — so "byte-exact page comparison" means the same bytes on every machine. Regenerating them is a script run plus a test run; see [`docs/测试与验证.md`](docs/测试与验证.md).
