@@ -1,0 +1,50 @@
+name: Release guards
+
+# 为什么与 test.yml 分开:
+#   test.yml 承载 README 顶部的徽章,必须快且稳。这里跑的是**完整发布链** ——
+#   Release 归档 + Universal 2 + 由内向外嵌套签名 + UTI/appex 硬校验 + DMG 挂载
+#   校验,分钟级且要用 hdiutil。混进徽章工作流的话,runner 抽一次风就会让"项目
+#   看起来是红的",而那和代码质量无关。
+#
+# 手动触发(workflow_dispatch):GitHub 网页上点一下就能验"发布链现在还通吗",
+# 不必在本机跑一遍 —— 这正是 build-app.sh 里那些硬校验该被自动执行的地方。
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  release-chain:
+    name: 发布链(.app 硬校验 + DMG 挂载校验)
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      # build-app.sh / make-dmg.sh 都支持 DIST_DIR 覆盖。默认产物落在仓库同级的
+      # ../Unroll-dist/(本机是为了不污染源码树),CI 里要落到工作区内,否则
+      # upload-artifact 取不到
+      DIST_DIR: ${{ github.workspace }}/Unroll-dist
+      # 跳过 AppleScript 驱动 Finder 的那一步:CI 无 GUI 会话,且该步骤会弹自动化授权
+      SKIP_FINDER_LAYOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      # 这一步的失败都是"沉默故障"类型 —— 少一个 UTI、少嵌一个 appex、扩展点写错、
+      # 签名顺序反了,症状统一是"装完看着正常,双击/空格没反应"。脚本内部逐项
+      # 硬校验并以非零码退出,所以这里不需要再加断言
+      - name: Build distributable .app (nested signing + hard checks)
+        run: ./Scripts/build-app.sh
+
+      - name: Package DMG (mount + signature + checksum checks)
+        run: ./Scripts/make-dmg.sh
+
+      - name: Upload DMG and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unroll-dmg
+          path: Unroll-dist/Unroll-*.dmg*
+          if-no-files-found: error

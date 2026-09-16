@@ -23,6 +23,10 @@ UnrollQuickLook/*/Info.plist
 *.orig
 *.rej
 
+# 发布前检用的额外泄漏关键词(真实姓名等)。**只放本机,绝不入库** ——
+# 这个文件的存在本身就是为了让真实身份不进仓库
+Scripts/.identity-patterns
+
 # 手工验收样本与工具编译产物(2026-09-11:样本由 Scripts/gen_big_sample.swift 现造)
 TestSamples/
 Scripts/gen_big_sample

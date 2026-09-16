@@ -1,16 +1,33 @@
 name: Tests
 
+# 这个工作流承载 README 顶部的徽章 —— 所以它必须"快且稳":
+# 不挂载磁盘、不驱动 Finder、不跑 Release 归档。发布链的校验在 release-guards.yml。
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# 同分支的新一轮 push 会取消上一轮尚未跑完的任务。
+# 只对 PR 生效:main 上的运行若被取消,徽章会显示成"已取消"(非绿)—— 而徽章承载
+# 的是"这个项目现在是好的",不能因为又推了一笔就临时变灰。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# 最小权限:这两个任务只需要读代码
+permissions:
+  contents: read
 
 jobs:
   archivekit:
     name: ArchiveKit (SPM)
     runs-on: macos-15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+      # 纯 Swift 包,不经过 Xcode 工程 —— 毫秒级反馈,用来隔离"归档读取"这一层
       - name: Run ArchiveKit tests
         working-directory: ArchiveKit
         run: swift test
@@ -18,12 +35,17 @@ jobs:
   app:
     name: App (xcodegen + xcodebuild)
     runs-on: macos-15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - name: Install xcodegen
         run: brew install xcodegen
+      # .xcodeproj 不入库(project.yml 才是唯一真源),所以 CI 必须自己生成一遍 ——
+      # 这一步顺带验证了"新人 clone 下来能不能跑起来"这件事
       - name: Generate Xcode project
         run: ./Scripts/regen.sh
+      # CODE_SIGNING_ALLOWED=NO:CI 没有证书也不需要。App 目标默认开着沙盒,
+      # 但未签名时 entitlements 不生效 —— 测试本身不依赖沙盒,故可跑
       - name: Build & test (unsigned)
         run: >
           xcodebuild test
