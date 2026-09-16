@@ -90,6 +90,16 @@ xattr -dr com.apple.quarantine /Applications/Unroll.app
 
 or **right-click** `Unroll.app` → **Open** → confirm.
 
+**Checking the download.** With no paid signature, the `SHA256` next to each release is the only integrity credential — it can tell you the file was not tampered with, but not which source it came from. The app records that itself, so you can close the loop without trusting anyone:
+
+```bash
+shasum -a 256 -c Unroll-<version>.dmg.sha256        # 1. the file is intact
+/usr/libexec/PlistBuddy -c 'Print :UnrollSourceCommit' \
+  "/Volumes/Unroll <version>/Unroll.app/Contents/Info.plist"   # 2. built from this commit
+```
+
+Compare the commit it prints with the repository. This works the same way for the installed copy: `PlistBuddy` against `/Applications/Unroll.app/Contents/Info.plist`.
+
 Once installed, `.cbz / .cbr / .cb7 / .cbt` files open in Unroll on double-click. Plain `.zip` is only offered inside the Open panel — Unroll never takes over the system's default handler for ZIP.
 
 The two Quick Look extensions live inside the app bundle and are picked up automatically once `Unroll.app` is in **Applications**. If pressing `Space` still shows a generic icon instead of a cover, open **System Settings → General → Login Items & Extensions → Quick Look** and make sure Unroll is switched on. To diagnose it stage by stage, run:

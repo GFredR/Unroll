@@ -90,6 +90,16 @@ xattr -dr com.apple.quarantine /Applications/Unroll.app
 
 或者**右键**点 `Unroll.app` → **打开** → 确认。
 
+**核对下载物。** 没有付费签名，每个 Release 旁边的 `SHA256` 就是唯一的完整性凭据 —— 它能说明文件没被改过，但说明不了它来自哪份代码。这件事 App 自己记着，不必信任何人就能对上：
+
+```bash
+shasum -a 256 -c Unroll-<版本>.dmg.sha256        # ① 文件完整
+/usr/libexec/PlistBuddy -c 'Print :UnrollSourceCommit' \
+  "/Volumes/Unroll <版本>/Unroll.app/Contents/Info.plist"   # ② 构建自哪个提交
+```
+
+把打印出来的提交号与仓库里同名的那笔一比即可。装好之后同样能查：把路径换成 `/Applications/Unroll.app/Contents/Info.plist`。
+
 装好后，`.cbz / .cbr / .cb7 / .cbt` 双击即用开卷打开。普通 `.zip` 只在「打开」面板里提供——开卷不会抢占系统对 ZIP 的默认关联。
 
 两个 QuickLook 扩展就在 App 包内，把 `Unroll.app` 放进「应用程序」后会自动被系统识别。如果按空格仍然只看到通用图标，去**系统设置 → 通用 → 登录项与扩展 → 快速查看**里确认开卷是打开的。想逐段排查是哪一环断了：

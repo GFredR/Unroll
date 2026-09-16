@@ -21,6 +21,7 @@
 - 加密归档三态呈现:无 / 部分页占位卡片 / 整档说明,绝不闪退
 - 崩溃采集 L0:零依赖零后端,异常退出自愿上报(App 自身零网络请求)
 - 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.7 MB(其中绝大多数是 Universal 2 二进制与两个 Finder 扩展)
+- **产物可自证来源**:App 内记有构建时的提交号,拿到 dmg 的人不必只信 SHA256 —— 打开包里的 `Info.plist` 就能核对这个二进制对应哪个公开提交。本项目没有付费签名,这是一条可以自查的信任锚
 
 **English**
 - Streams pages straight from the archive: cbz / cbr / cb7 / cbt, plus bare zip / rar / 7z / tar (content sniffing, extension-agnostic)
@@ -39,6 +40,7 @@
 - Encrypted archives rendered in three states: none / placeholder cards for locked pages / explanation — never crashes
 - Crash reporting L0: zero dependencies, zero backend, voluntary upload (the app itself makes no network requests)
 - Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.7 MB (mostly the Universal 2 binary plus the two Finder extensions)
+- **The build can prove its own origin**: the app records the commit it was built from, so a downloader does not have to take the SHA256 on faith — read `Info.plist` inside the bundle and check which public commit this binary corresponds to. With no paid signing certificate in play, that is a trust anchor you can verify yourself
 
 ## 1.0.0 — 2026-09-15（仅本机打标，从未发布 / tagged locally, never published）
 
