@@ -170,6 +170,25 @@ else
     fail "缺 $DMG —— 先跑:./Scripts/make-dmg.sh"
 fi
 
+# 产物必须由**当前的**打包脚本生成。改了打包脚本却不重建,是一类最隐蔽的
+# 沉默不一致:源码没变、tag 没变、sha256 也自洽 —— 唯独产物里少了这次的改进
+# (2026-09-16 实测撞上:.fseventsd 隐藏与布局告警改完,旧 dmg 里一个都没有)。
+SCRIPTS=(Scripts/build-app.sh Scripts/make-dmg.sh)
+if [ -n "$(git status --porcelain -- "${SCRIPTS[@]}")" ]; then
+    fail "打包脚本有未提交改动 —— 现有产物必然不是它生成的"
+fi
+if [ -f "$DMG" ]; then
+    SCRIPT_TS="$(git log -1 --format=%ct -- "${SCRIPTS[@]}" 2>/dev/null || echo 0)"
+    DMG_TS="$(stat -f %m "$DMG" 2>/dev/null || echo 0)"
+    if [ "${DMG_TS:-0}" -ge "${SCRIPT_TS:-0}" ]; then
+        ok "产物不早于打包脚本的最后一次提交"
+    else
+        fail "打包脚本在产物生成之后被改过 —— 产物不含这次的改进"
+        echo "      最后一次脚本改动:$(git log -1 --format='%h %s' -- "${SCRIPTS[@]}")" >&2
+        echo "      → 重跑:./Scripts/build-app.sh && ./Scripts/make-dmg.sh" >&2
+    fi
+fi
+
 if [ -f "$SHA" ]; then
     # 必须 cd 到校验和文件所在目录再校验:文件里记的是相对文件名,
     # 在别处跑会报 No such file or directory,被误读成"产物损坏"
@@ -271,10 +290,11 @@ cat <<'EOF'
   1. QuickLook 真机验收:./Scripts/verify-quicklook.sh --install
      若扩展不生效 → 从 release notes 里摘掉 QuickLook 条目并重切 DMG
      (不能让说明写着一件没验证过的事)
-  2. DMG 的 Finder 图标布局(图标位置/窗口尺寸) —— SKIP_FINDER_LAYOUT=1 时跳过
-  3. 首次启动的崩溃询问弹窗(需先人为制造一次异常退出)
-  4. 200 页连翻的内存与掉帧(决定是否要走 AppKit Plan B)
-  5. GitHub 网页侧:仓库描述与 Topics 是否正常;以及
+  2. 界面验收取证:./Scripts/verify-ui.sh
+     自动拍三张截图(空态 / 崩溃询问 / dmg 布局)到 docs/,**需要人做的只是看一眼**。
+     能自动拍的是"它长什么样";拍不出来的是"这文案是否得体",那仍得人判断。
+  3. 200 页连翻的内存与掉帧(决定是否要走 AppKit Plan B)—— 体感类,只能人跑
+  4. GitHub 网页侧:仓库描述与 Topics 是否正常;以及
      Settings → Emails → "Block command line pushes that expose my email" 已勾选
 EOF
 

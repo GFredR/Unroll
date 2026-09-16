@@ -77,10 +77,17 @@ fi
 ditto "$APP_DIR" "$MOUNT_POINT/$APP_NAME.app"
 ln -s /Applications "$MOUNT_POINT/Applications"
 
-# 4. Finder 窗口布局(失败一律不阻塞 —— 布局只是观感)
+# 4. Finder 窗口布局(失败不阻塞 —— 布局只是观感,**但不能悄悄失败**)
+#
+# 为什么这里要显式判成败:布局靠 AppleScript 驱动 Finder,而 AppleScript 依赖
+# 系统「自动化」授权。授权缺失时 osascript 会**直接失败**,旧写法 `|| true` 把它
+# 连人带话一起吞掉 —— 脚本照旧打印「→ 设置 Finder 窗口布局」,产物却根本没布局,
+# 属于典型的沉默故障(2026-09-16 实测踩到:一度以为布局做了,其实是 .DS_Store 兜住了)。
+# 判据用 `.DS_Store`:Finder 把图标位置/窗口几何写在这里,它不在就说明没落盘。
+LAYOUT_OK=0
 if [ "${SKIP_FINDER_LAYOUT:-0}" != "1" ]; then
   echo "→ 设置 Finder 窗口布局"
-  osascript <<EOF || true
+  if osascript <<EOF
   tell application "Finder"
     tell disk "$VOL_NAME"
       open
@@ -99,7 +106,26 @@ if [ "${SKIP_FINDER_LAYOUT:-0}" != "1" ]; then
     end tell
   end tell
 EOF
+  then
+    sleep 1 # Finder 写 .DS_Store 是异步的,给它一拍
+    # 注意:这里不能写成 `[ -f F ] && LAYOUT_OK=1` —— 条件为假时整条 AND-OR
+    # 列表返回 1,在 `set -e` 下会直接**终止脚本**(实测过的坑)
+    if [ -f "$MOUNT_POINT/.DS_Store" ]; then LAYOUT_OK=1; fi
+  fi
+  if [ "$LAYOUT_OK" = "1" ]; then
+    echo "  布局    : 已写入 .DS_Store ✓"
+  else
+    echo "  ! Finder 布局未生效 —— dmg 打开时图标是默认排列、窗口是默认尺寸" >&2
+    echo "    仍可正常拖动安装,只是观感打折。原因通常是当前终端没有「自动化」权限:" >&2
+    echo "    系统设置 → 隐私与安全性 → 自动化,放行后再跑一次即可。" >&2
+  fi
 fi
+
+# 4b. 把 .fseventsd 藏起来
+#     它是**挂载时由系统自动创建**的、不带 hidden 标志的普通文件夹。绝大多数人
+#     看不到(点号开头默认隐藏),但开了「显示隐藏文件」的人会看到卷里多一个突兀
+#     的目录 —— 实测本机 AppleShowAllFiles=1 时它就明晃晃地显示在窗口第一行。
+chflags hidden "$MOUNT_POINT/.fseventsd" 2>/dev/null || true
 
 # 5. 卸载,再压成只读压缩镜像
 echo "→ 压缩为最终 dmg"
@@ -137,6 +163,18 @@ if [ -n "$MOUNT_OUT" ]; then
     hdiutil detach "$MOUNT_OUT" > /dev/null || true
     exit 1
   fi
+  # 布局与观感只影响「打开 dmg 的第一眼」,但第一眼正是下载者唯一会给的注意力。
+  # 两条都只警告不失败:产物本身是好的,只是观感打折,不该因此中断发布。
+  if [ -f "$MOUNT_OUT/.DS_Store" ]; then
+    echo "  布局    : 图标布局已随镜像发布"
+  else
+    echo "  ! 镜像内没有 .DS_Store —— 打开 dmg 时图标为默认排列(仍可正常拖装)" >&2
+  fi
+  FSEV_FLAGS="$(ls -ldO "$MOUNT_OUT/.fseventsd" 2>/dev/null | awk '{print $5}' || true)"
+  case "$FSEV_FLAGS" in
+    *hidden*) echo "  观感    : .fseventsd 已隐藏" ;;
+    *)        echo "  ! .fseventsd 未隐藏 —— 开了「显示隐藏文件」的人会看到卷里多一个目录" >&2 ;;
+  esac
   hdiutil detach "$MOUNT_OUT" > /dev/null || true
 else
   echo "  ✗ dmg 挂载失败" >&2

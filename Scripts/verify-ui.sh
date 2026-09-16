@@ -1,0 +1,237 @@
+#!/bin/bash
+# ============================================================================
+# verify-ui.sh —— 界面验收自动取证(空态 / 崩溃询问 / dmg 布局)
+# ----------------------------------------------------------------------------
+# 用法:
+#   ./Scripts/verify-ui.sh                 # 拍三张截图到 docs/
+#   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
+#   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
+#   ONLY=crash ./Scripts/verify-ui.sh                 # 只跑某一段(none|empty|crash|dmg)
+#
+# 为什么要有这个脚本:
+#   交付前有三处只能靠"看"来判定的东西 —— 空态长什么样、崩溃询问弹窗的文案与
+#   按钮、dmg 打开后的图标排列。过去它们被记成"需要人眼确认",于是要么拖着不做,
+#   要么临发布才想起来。但其中**能被拍下来**的部分完全可以自动做掉:脚本负责
+#   "拍到正确的那一帧",人只负责"看一眼对不对"。
+#
+# 拍不出来、必须人判断的:文案是否得体、图标间距是否好看。脚本不假装覆盖这些。
+#
+# 前置:终端需要「屏幕录制」权限(截图)与「自动化」权限(驱动 Finder)。
+#       缺权限时对应段落会明确报错,不会静默跳过。
+# ============================================================================
+set -uo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT_DIR"
+
+APP_NAME="Unroll"
+VERSION="$(sed -n 's/.*MARKETING_VERSION: *"\([^"]*\)".*/\1/p' project.yml | head -1)"
+DIST_DIR="${DIST_DIR:-${ROOT_DIR}-dist}"
+APP="${APP:-$DIST_DIR/$APP_NAME.app}"
+DMG="$DIST_DIR/$APP_NAME-$VERSION.dmg"
+OUT_DIR="${OUT_DIR:-$ROOT_DIR/docs}"
+ONLY="${ONLY:-all}"
+
+SUPPORT_DIR="$HOME/Library/Containers/com.gfredr.unroll/Data/Library/Application Support/Unroll"
+SESSION="$SUPPORT_DIR/session.json"
+
+FAILED=0
+ok()   { echo "  ✓ $*"; }
+bad()  { echo "  ✗ $*" >&2; FAILED=$((FAILED + 1)); }
+info() { echo "  · $*"; }
+head2(){ echo ""; echo "── $* ─────────────────────────────────────"; }
+
+# ---------------------------------------------------------------- 环境自检 --
+head2 "环境自检"
+
+if [ ! -d "$APP" ]; then
+    bad "找不到被测的 .app:$APP(先跑 Scripts/build-app.sh,或用 APP= 指定)"
+    exit 2
+fi
+ok "被测 App:$APP($(sed -n 's/.*MARKETING_VERSION: *"\([^"]*\)".*/\1/p' project.yml | head -1))"
+
+mkdir -p "$OUT_DIR"
+
+# 屏幕录制权限:没有它 screencapture 会产出空图或干脆不写文件。
+# 两处实测坑:① 文件名**不能以点开头** —— screencapture 会报
+# "cannot write file to intended destination" 且**退出码仍是 0**;
+# ② 正因为它用退出码骗人,判据只能是"文件是否真的非空",不能信 rc。
+PROBE=/tmp/verify-ui-probe.png
+rm -f "$PROBE"
+screencapture -x -R1,1,40,40 "$PROBE" 2>/dev/null || true
+if [ ! -s "$PROBE" ]; then
+    bad "截屏不可用 —— 本终端缺「屏幕录制」权限"
+    info "系统设置 → 隐私与安全性 → 屏幕录制,勾选后重启终端"
+    exit 2
+fi
+ok "截屏可用"
+rm -f "$PROBE"
+
+# 窗口枚举小工具:编译一次,循环里反复用(swift 直跑每轮要多花约 1 秒)
+WINID=/tmp/verify-ui-winid
+swiftc -O -o "$WINID" Scripts/winid.swift 2>/dev/null || { bad "winid.swift 编译失败"; exit 2; }
+ok "窗口枚举工具就绪"
+
+unroll_windows() { "$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" {print $1"\t"$4}'; }
+
+quit_app() {
+    for p in $(pgrep -x "$APP_NAME" 2>/dev/null); do kill -TERM "$p" 2>/dev/null; done
+    sleep 2
+}
+
+# 复位会话标记:alive=false 且清掉 suppressedVersion。
+# 不这么做的话,脚本会给用户留下一次**假的**"上次异常退出"。
+reset_session() {
+    local boot
+    boot="$(sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+), usec = ([0-9]+).*/\1.\2/')"
+    printf '{"alive":false,"version":"%s","build":"%s","bootTime":%s}' \
+        "$VERSION" "$VERSION" "$boot" > "$SESSION"
+}
+trap 'reset_session 2>/dev/null || true' EXIT
+
+# ------------------------------------------------------------------ 空态 --
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "empty" ]; then
+    head2 "空态窗口"
+    quit_app
+    reset_session
+    open -a "$APP"
+    sleep 3
+    ID="$(unroll_windows | head -1 | cut -f1)"
+    if [ -z "$ID" ]; then
+        bad "App 启动后找不到主窗口"
+    else
+        screencapture -l"$ID" -x -o "$OUT_DIR/shot-empty-state.png" 2>/dev/null
+        if [ -s "$OUT_DIR/shot-empty-state.png" ]; then
+            ok "shot-empty-state.png"
+        else
+            bad "空态截图失败"
+        fi
+    fi
+fi
+
+# ------------------------------------------------------------- 崩溃询问 --
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "crash" ]; then
+    head2 "崩溃询问弹窗"
+
+    # 人为制造一次"异常退出":强杀不会写 alive=false,正是真实的崩溃残留形态
+    quit_app
+    BOOT="$(sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+), usec = ([0-9]+).*/\1.\2/')"
+    printf '{"alive":true,"version":"%s","build":"%s","bootTime":%s}' \
+        "$VERSION" "$VERSION" "$BOOT" > "$SESSION"
+    info "已注入异常退出残留(alive=true)"
+
+    open -a "$APP"
+    # 弹窗在启动后 1.5s 出现,且实测只停留很短时间 —— 必须高频轮询,
+    # 只在窗口集合**发生变化**的那一拍抓图,既不漏帧也不刷屏
+    FOUND=""
+    PREV=""
+    for i in $(seq 1 24); do
+        SNAP="$(unroll_windows)"
+        SIG="$(printf '%s' "$SNAP" | tr '\n' ';')"
+        if [ "$SIG" != "$PREV" ] && [ -n "$SIG" ]; then
+            # 弹窗是独立的小面板:同进程里尺寸明显更小的那个
+            ALERT_ID="$(printf '%s\n' "$SNAP" | awk -F'\t' '
+                { split($2, a, "x"); if (a[1] + 0 > 0 && (min == 0 || a[1] + 0 < min)) { min = a[1]+0; id = $1 } }
+                END { print id }')"
+            COUNT="$(printf '%s\n' "$SNAP" | grep -c .)"
+            if [ "${COUNT:-0}" -ge 2 ] && [ -n "$ALERT_ID" ]; then
+                screencapture -l"$ALERT_ID" -x -o "$OUT_DIR/shot-crash-prompt.png" 2>/dev/null
+                [ -s "$OUT_DIR/shot-crash-prompt.png" ] && FOUND="$ALERT_ID"
+            fi
+        fi
+        PREV="$SIG"
+        [ -n "$FOUND" ] && break
+        sleep 0.4
+    done
+
+    if [ -n "$FOUND" ]; then
+        ok "shot-crash-prompt.png(弹窗窗口 id=$FOUND)"
+    else
+        bad "没抓到崩溃询问弹窗"
+        info "可能原因:suppressedVersion 已是当前版本(同版本不再询问)"
+        info "检查:$SESSION"
+    fi
+
+    # 免打扰:用户拒绝后同一版本不该再问第二次
+    head2 "崩溃询问 · 免打扰"
+    quit_app
+    SUPPRESSED="$(sed -n 's/.*"suppressedVersion":"\([^"]*\)".*/\1/p' "$SESSION" 2>/dev/null)"
+    if [ -z "$SUPPRESSED" ]; then
+        info "弹窗未被人处理过(没有 suppressedVersion),跳过该验证"
+        info "如需验证:手动点一次弹窗的「不再询问」后重跑本脚本"
+    else
+        open -a "$APP"
+        AGAIN=""
+        for i in $(seq 1 12); do
+            [ "$(unroll_windows | grep -c .)" -ge 2 ] && AGAIN="yes"
+            sleep 0.4
+        done
+        if [ -z "$AGAIN" ]; then
+            ok "同版本($SUPPRESSED)不再弹窗 —— 免打扰生效"
+        else
+            bad "suppressedVersion=$SUPPRESSED 时仍然弹窗了"
+        fi
+    fi
+fi
+
+# --------------------------------------------------------------- dmg 布局 --
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "dmg" ]; then
+    head2 "dmg 图标布局"
+
+    if [ ! -f "$DMG" ]; then
+        bad "找不到 $DMG(先跑 Scripts/make-dmg.sh)"
+    else
+        # 先卸干净同名残留卷,否则 hdiutil 会挂到 " 1" 之类的名字上,后面找不到
+        for V in /Volumes/"$APP_NAME"*; do
+            [ -d "$V" ] && hdiutil detach "$V" >/dev/null 2>&1
+        done
+        MOUNT="$(hdiutil attach -readonly -noverify "$DMG" 2>/dev/null | grep -o '/Volumes/.*' | head -1 || true)"
+        if [ -z "$MOUNT" ]; then
+            bad "dmg 挂载失败"
+        else
+            ok "已挂载:$MOUNT"
+            if [ -f "$MOUNT/.DS_Store" ]; then
+                ok "镜像内含 .DS_Store(图标布局已随发布物下发)"
+            else
+                bad "镜像内没有 .DS_Store —— 打开 dmg 时图标是默认排列"
+                info "在授予「自动化」权限的终端里重跑 Scripts/make-dmg.sh"
+            fi
+            FSEV="$(ls -ldO "$MOUNT/.fseventsd" 2>/dev/null | awk '{print $5}' || true)"
+            case "$FSEV" in
+                *hidden*) ok ".fseventsd 已隐藏" ;;
+                *) bad ".fseventsd 未隐藏 —— 开了「显示隐藏文件」的人会看到它" ;;
+            esac
+
+            open "$MOUNT"
+            sleep 4
+            FID="$("$WINID" 访达 2>/dev/null | awk -F'\t' -v v="$APP_NAME" '$3 ~ v {print $1; exit}')"
+            if [ -n "$FID" ]; then
+                screencapture -l"$FID" -x -o "$OUT_DIR/shot-dmg-layout.png" 2>/dev/null
+                [ -s "$OUT_DIR/shot-dmg-layout.png" ] && ok "shot-dmg-layout.png"
+            else
+                bad "找不到 dmg 的访达窗口(可能需要「自动化」权限)"
+            fi
+            hdiutil detach "$MOUNT" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT" >/dev/null 2>&1
+        fi
+    fi
+fi
+
+# ------------------------------------------------------------------ 收尾 --
+quit_app
+reset_session
+
+head2 "结论"
+if [ "$FAILED" -gt 0 ]; then
+    echo ""
+    echo "✗ 有 $FAILED 项未通过。"
+    exit 1
+fi
+echo "  ✓ 全部通过"
+echo ""
+echo "截图在 $OUT_DIR:"
+ls -1 "$OUT_DIR"/shot-*.png 2>/dev/null | sed 's/^/    /'
+echo ""
+echo "脚本能保证的是「拍到的就是那一帧」;下面这些仍要你自己看一眼:"
+echo "    · 崩溃询问的文案读起来会不会太硬"
+echo "    · 空态的三个元素(AppIcon / 说明 / 打开按钮)是否协调"
+echo "    · dmg 里两个图标的位置关系是否符合直觉(左 App 右 Applications)"
