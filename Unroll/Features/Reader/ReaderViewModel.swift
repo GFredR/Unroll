@@ -100,8 +100,17 @@ final class ReaderViewModel: ObservableObject {
         didSet {
             guard oldValue != layout, !isRestoringProgress else { return }
             Breadcrumbs.shared.record(.layoutChanged(layout.rawValue))
-            saveProgressNow()
-            refreshSecondary()
+            realignSpread()
+        }
+    }
+    /// 封面单独一页(2026-09-16)。双页配对口径见 `SpreadPaging`:
+    /// 日式单行本的封面是独立一页,关掉它每翻一摊就错位一面。
+    /// 默认关 = 与旧版本行为逐位一致(不改变既有用户的手感)
+    @Published var coverAlone = false {
+        didSet {
+            guard oldValue != coverAlone, !isRestoringProgress else { return }
+            Breadcrumbs.shared.record(.coverAloneChanged(coverAlone))
+            realignSpread()
         }
     }
     @Published var direction: ReadingDirection = .leftToRight {
@@ -121,15 +130,12 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
-    /// 双页模式下的次页下标(越界尾页 → nil,View 退化为单页)
+    /// 双页模式下的次页下标(越界尾页 / 封面单独那一摊 → nil,View 退化为单页)。
+    /// 配对口径全在 `SpreadPaging`(纯函数,独立单测)—— 本处只做转发
     var secondaryIndex: Int? {
-        guard layout == .dual else { return nil }
-        let next = pageIndex + 1
-        return next < pageCount ? next : nil
+        SpreadPaging.secondaryIndex(for: pageIndex, pageCount: pageCount,
+                                   dual: layout == .dual, coverAlone: coverAlone)
     }
-
-    /// 翻页步长:双页一次跨两页
-    private var pageStep: Int { layout == .dual ? 2 : 1 }
 
     // MARK: - 私有
 
@@ -230,8 +236,13 @@ final class ReaderViewModel: ObservableObject {
                 if let l = PageLayout(rawValue: saved.layout) { layout = l }
                 if let d = ReadingDirection(rawValue: saved.direction) { direction = d }
                 if let f = FitMode(rawValue: saved.fitMode) { fitMode = f }
+                coverAlone = saved.coverAlone ?? false   // 老记录无此字段 → 关(旧行为)
                 isRestoringProgress = false
-                startPage = saved.page
+                // 归一:存的是「当时在上屏的那一页」,双页下要落回所属摊的首面,
+                // 否则会恢复出「主图是摊第二面」的错位摊(配对口径变过时尤其明显)
+                startPage = layout == .dual
+                    ? SpreadPaging.spreadStart(for: saved.page, coverAlone: coverAlone)
+                    : saved.page
                 pageIndex = startPage    // 状态机页码同步(翻页语义全走 goTo,这里是对齐)
                 Breadcrumbs.shared.record(.progressRestored(page: startPage))
             }
@@ -251,22 +262,53 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 翻页(图 5 主链入口)
 
-    /// 跳到指定页(越界自动夹紧;失败页重试:同页 + 已有失败卡也放行)
+    /// 跳到指定页(越界自动夹紧;失败页重试:同页 + 已有失败卡也放行)。
+    /// 双页模式下目标页会**归一到它所属那一摊的首面** —— 见 `SpreadPaging.spreadStart`
     func goTo(_ index: Int) {
         guard phase == .reading, store != nil, pageCount > 0 else { return }
         let clamped = min(max(index, 0), pageCount - 1)
-        guard clamped != pageIndex || presentation.failure != nil else { return }
+        let target = layout == .dual
+            ? SpreadPaging.spreadStart(for: clamped, coverAlone: coverAlone)
+            : clamped
+        guard target != pageIndex || presentation.failure != nil else { return }
 
-        pageIndex = clamped
+        pageIndex = target
         saveProgressNow()
         presentation.failure = nil
         presentation.isLoading = true
         secondary = nil   // 旧次页已失效,留白待新次页(不垫旧图,视觉上是「下一摊」)
-        Task { await loadPage(clamped) }
+        Task { await loadPage(target) }
     }
 
-    func nextPage() { goTo(pageIndex + pageStep) }
-    func previousPage() { goTo(pageIndex - pageStep) }
+    func nextPage() {
+        goTo(SpreadPaging.next(from: pageIndex, pageCount: pageCount,
+                               dual: layout == .dual, coverAlone: coverAlone))
+    }
+
+    func previousPage() {
+        goTo(SpreadPaging.previous(from: pageIndex, pageCount: pageCount,
+                                   dual: layout == .dual, coverAlone: coverAlone))
+    }
+
+    /// 配对口径变化(布局 / 封面单独)后,把当前页归一到所属摊并刷新两面。
+    /// 不是摊首面时主图本身要换(否则会出现「主图是摊的第二面」的错位),
+    /// 是摊首面时只补次页(主图不动、无闪烁)
+    private func realignSpread() {
+        guard phase == .reading, pageCount > 0 else { return }
+        let target = layout == .dual
+            ? SpreadPaging.spreadStart(for: pageIndex, coverAlone: coverAlone)
+            : pageIndex
+        if target != pageIndex {
+            pageIndex = target
+            presentation.failure = nil
+            presentation.isLoading = true
+            secondary = nil
+            Task { await loadPage(target) }
+        } else {
+            refreshSecondary()
+        }
+        saveProgressNow()
+    }
 
     /// 布局/方向切换后,次页图立刻跟上(主图不动,无闪烁)
     private func refreshSecondary() {
@@ -362,7 +404,8 @@ final class ReaderViewModel: ObservableObject {
                            total: pageCount,
                            layout: layout.rawValue,
                            direction: direction.rawValue,
-                           fitMode: fitMode.rawValue)
+                           fitMode: fitMode.rawValue,
+                           coverAlone: coverAlone)
     }
 
     // MARK: - 书签(2026-09-15)

@@ -50,24 +50,27 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case progressRestored(page: Int)
     /// 书签标记/取消:记页码 + on/off(同样只有页码,无文件名)
     case bookmarkToggled(page: Int, marked: Bool)
+    /// 双页配对口径:封面是否单独一页(2026-09-16)。只记开关,无页码无文件名
+    case coverAloneChanged(Bool)
 
     var name: String {
         switch self {
-        case .appLaunched:      return "appLaunched"
-        case .appTerminated:    return "appTerminated"
-        case .openArchive:      return "openArchive"
-        case .indexBuilt:       return "indexBuilt"
-        case .openFailed:       return "openFailed"
-        case .encryptedPages:   return "encryptedPages"
-        case .pageDecode:       return "pageDecode"
-        case .pageFailed:       return "pageFailed"
-        case .cacheDemote:      return "cacheDemote"
-        case .cacheEvict:       return "cacheEvict"
-        case .layoutChanged:    return "layoutChanged"
-        case .directionChanged: return "directionChanged"
-        case .fitModeChanged:   return "fitModeChanged"
-        case .progressRestored: return "progressRestored"
-        case .bookmarkToggled:  return "bookmarkToggled"
+        case .appLaunched:       return "appLaunched"
+        case .appTerminated:     return "appTerminated"
+        case .openArchive:       return "openArchive"
+        case .indexBuilt:        return "indexBuilt"
+        case .openFailed:        return "openFailed"
+        case .encryptedPages:    return "encryptedPages"
+        case .pageDecode:        return "pageDecode"
+        case .pageFailed:        return "pageFailed"
+        case .cacheDemote:       return "cacheDemote"
+        case .cacheEvict:        return "cacheEvict"
+        case .layoutChanged:     return "layoutChanged"
+        case .directionChanged:  return "directionChanged"
+        case .fitModeChanged:    return "fitModeChanged"
+        case .progressRestored:  return "progressRestored"
+        case .bookmarkToggled:   return "bookmarkToggled"
+        case .coverAloneChanged: return "coverAloneChanged"
         }
     }
 
@@ -103,6 +106,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return String(page)
         case .bookmarkToggled(let page, let marked):
             return "\(page):\(marked ? "on" : "off")"
+        case .coverAloneChanged(let on):
+            return on ? "on" : "off"
         }
     }
 }

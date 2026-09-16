@@ -119,6 +119,43 @@ final class ReadingProgressTests: XCTestCase {
         XCTAssertNil(entry?.total)
     }
 
+    // MARK: - 封面单独一页(双页配对口径,2026-09-16)
+
+    /// coverAlone 往返一致(重开同一本要恢复上次的配对口径)
+    func testCoverAloneRoundtrip() {
+        let progress = ReadingProgress(defaults: defaults)
+        progress.save(key: "k", page: 1, layout: "dual",
+                      direction: "rightToLeft", fitMode: "fit", coverAlone: true)
+
+        XCTAssertEqual(progress.entry(forKey: "k")?.coverAlone, true)
+    }
+
+    /// coverAlone 缺省写入 = false(老调用方不传参时行为不变)
+    func testCoverAloneDefaultsToFalseWhenOmitted() {
+        let progress = ReadingProgress(defaults: defaults)
+        progress.save(key: "k", page: 1, layout: "dual",
+                      direction: "leftToRight", fitMode: "fit")
+
+        XCTAssertEqual(progress.entry(forKey: "k")?.coverAlone, false)
+    }
+
+    /// **升级不丢数据**:老记录里没有 coverAlone 字段。
+    /// 该字段若写成非可选,解码会抛 keyNotFound,而解码是 `try?` ——
+    /// 整份字典会被当成空,用户的全部进度一次性消失。这条用例锁死这个坑
+    func testLegacyRecordWithoutCoverAloneKeepsProgress() {
+        let json = """
+        {"k":{"page":3,"layout":"dual","direction":"leftToRight",\
+        "fitMode":"fit","updatedAt":0}}
+        """
+        defaults.set(Data(json.utf8), forKey: "reading.progress.v1")
+        let progress = ReadingProgress(defaults: defaults)
+
+        let entry = progress.entry(forKey: "k")
+        XCTAssertEqual(entry?.page, 3, "老记录必须仍能读出页码")
+        XCTAssertEqual(progress.allEntries().count, 1, "整份字典不得因新字段被丢弃")
+        XCTAssertNil(entry?.coverAlone, "缺省解成 nil,调用方按 false 处理")
+    }
+
     /// 键 → 文件名还原(菜单按文件名匹配进度)
     func testDocumentNameParsedFromKey() {
         XCTAssertEqual(ReadingProgress.documentName(fromKey: ReadingProgress.key(name: "a.cbz", size: 12)),

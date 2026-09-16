@@ -21,7 +21,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Zero third-party dependencies** — it uses the `libarchive` (BSD-2) that already ships with macOS. The entire app is under 1 MB.
 - **A single sequential scanner** — pages are pulled through one streaming pass, so page 200 costs about the same as page 1. The naive alternative (reopening the archive per page) degrades quadratically on solid 7z archives: measured **71× slower** at 150 pages, and getting worse as the archive grows.
 - **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
-- **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position.
+- **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position. **Cover on its own page** (`⌥⌘C`) matches how a manga volume is actually bound: the cover stands alone, then 1-2 / 3-4 pair up. Off by default, since not every cbz is laid out as a bound volume.
 - **Keyboard-first** — every action is reachable without touching the mouse.
 - **HUD overlay** — filename, page number and a progress bar; fades out 2.5 s after you stop moving.
 - **Recent documents** — the last 10 archives, remembered with security-scoped bookmarks so the sandbox can reopen them. The menu lists file names only, and shows how far you got in each one.
@@ -119,6 +119,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | --- | --- |
 | `⌘O` | Open… |
 | `⌘1` / `⌘2` | Single page / two-page spread |
+| `⌥⌘C` | Cover on its own page (spread pairing) |
 | `⇧⌘L` / `⇧⌘R` | Left-to-right / right-to-left (manga) |
 | `⇧⌘↑` | Back to cover |
 | `⇧⌘↓` | Jump to last page |

@@ -189,6 +189,102 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(vm.pageIndex, 1, "前进语义与方向无关,恒 +1(文档序)")
     }
 
+    // MARK: - 封面单独一页(双页配对口径,2026-09-16 真缺陷修复)
+
+    /// 默认关 = 与旧版本行为逐位一致(封面与下一页并排)
+    func testCoverAloneOffByDefaultKeepsLegacyPairing() async throws {
+        let vm = try await openFixtureOrSkip()
+        XCTAssertFalse(vm.coverAlone, "默认必须是关,否则老用户手感被悄悄改掉")
+        vm.layout = .dual
+        XCTAssertEqual(vm.secondaryIndex, 1, "旧配对:封面与第 1 页并排")
+    }
+
+    /// 开着 = 封面单独上屏,之后 (1,2) 才是正确的一摊;第 0 摊 → 第 1 摊步长为 1
+    func testCoverAlonePairsCoverByItself() async throws {
+        let vm = try await openFixtureOrSkip()
+        XCTAssertGreaterThanOrEqual(vm.pageCount, 3, "本用例依赖至少 3 页")
+        vm.layout = .dual
+        vm.coverAlone = true
+
+        XCTAssertEqual(vm.pageIndex, 0, "切口径不得跳页")
+        XCTAssertNil(vm.secondaryIndex, "封面必须单独一屏")
+
+        vm.nextPage()
+        XCTAssertEqual(vm.pageIndex, 1, "封面之后是第 1 页(旧实现会直接跳到第 2 页)")
+        XCTAssertEqual(vm.secondaryIndex, 2, "正确的摊是 (1,2)")
+    }
+
+    /// 跳到「摊的第二面」时归一到摊首面 —— 保证目标页一定可见
+    func testJumpToSecondFaceOfSpreadAlignsToSpreadStart() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .dual
+        vm.coverAlone = true
+
+        vm.goTo(2)                               // 第 3 面,属于 (1,2) 这一摊
+        XCTAssertEqual(vm.pageIndex, 1, "应归一到摊首面,否则主图会是摊的第二面")
+        XCTAssertEqual(vm.secondaryIndex, 2)
+
+        // 关掉口径后,第 1 面不再与第 0 面同摊 → 回到摊首面 0
+        vm.coverAlone = false
+        XCTAssertEqual(vm.pageIndex, 0)
+        XCTAssertEqual(vm.secondaryIndex, 1)
+    }
+
+    /// 配对口径变化时主图必须换页(单页档停在第 2 面 → 开封面单独的双页 → 归一)
+    func testToggleCoverAloneRealignsSinglePagePosition() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.goTo(2)
+        vm.layout = .dual
+        XCTAssertEqual(vm.pageIndex, 2, "不单独封面时第 2 面本就是摊首面")
+
+        vm.coverAlone = true
+        XCTAssertEqual(vm.pageIndex, 1, "封面单独后 (1,2) 才是一摊,主图须落到摊首面")
+        XCTAssertEqual(vm.secondaryIndex, 2)
+    }
+
+    /// 口径随文档记忆:重开同一本恢复
+    func testCoverAloneSurvivesReopen() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+
+        let first = makeViewModel()
+        await first.open(url: url).value
+        guard case .reading = first.phase else { return XCTFail("首次打开应进入 reading") }
+        first.layout = .dual
+        first.coverAlone = true
+        first.goTo(1)
+        XCTAssertEqual(first.pageIndex, 1)
+
+        let second = makeViewModel(reuseProgress: true)
+        await second.open(url: url).value
+        guard case .reading = second.phase else { return XCTFail("重开应进入 reading") }
+        XCTAssertTrue(second.coverAlone, "封面单独口径应随文档恢复")
+        XCTAssertEqual(second.pageIndex, 1, "恢复到摊首面")
+        XCTAssertEqual(second.secondaryIndex, 2)
+    }
+
+    /// 老记录(无 coverAlone 字段)恢复时必须退化成「不单独封面」,且进度不丢
+    func testResumeLegacyProgressWithoutCoverAloneFallsBackToOff() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        cleanProgress()
+        let size = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        progressStore().save(key: ReadingProgress.key(name: url.lastPathComponent, size: size),
+                             page: 2, layout: "dual",
+                             direction: "rightToLeft", fitMode: "fitWidth")
+
+        let vm = makeViewModel(reuseProgress: true)
+        await vm.open(url: url).value
+        guard case .reading = vm.phase else { return XCTFail("打开应进入 reading") }
+        XCTAssertFalse(vm.coverAlone, "老记录没有该字段 → 关")
+        XCTAssertEqual(vm.pageIndex, 2, "老记录页码照常恢复(不单独封面时 2 就是摊首面)")
+        XCTAssertEqual(vm.secondaryIndex, nil, "3 页文档:末面单独")
+    }
+
     // MARK: - 续读记忆(v2「进度记忆」,2026-09-15)
 
     /// 打开 → 翻页/换模式 → 换一个 VM(同一进度存储)重开 → 页码与模式全部恢复

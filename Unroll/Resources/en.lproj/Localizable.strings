@@ -64,6 +64,7 @@
 "app.menu.view" = "View";
 "reader.layout.single" = "Single Page";
 "reader.layout.dual" = "Two Pages";
+"app.menu.coverAlone" = "Cover on Its Own Page";
 "reader.direction.ltr" = "Left to Right";
 "reader.direction.rtl" = "Right to Left (Manga)";
 "app.menu.firstPage" = "Back to Cover";

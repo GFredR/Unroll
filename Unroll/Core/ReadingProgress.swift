@@ -1,7 +1,8 @@
 // AI-Generated | 可修改
 // ReadingProgress —— 续读记忆(v2 候选池「进度记忆」提前落地,2026-09-15)
 // ----------------------------------------------------------------------------
-// 每本文档记住:页码 + 双页/单页 + 左开/右开 + 缩放档位,重开同一文件自动恢复。
+// 每本文档记住:页码 + 双页/单页 + 左开/右开 + 缩放档位 + 封面单独一页,
+// 重开同一文件自动恢复。
 // 文档身份 = 文件名 + 文件大小(与最近打开同款隐私基线:只落文件名,不落路径;
 // 同名不同文件靠大小区分,极端碰撞只是恢复错位,不致命)。
 //
@@ -24,6 +25,10 @@ struct ReadingProgress {
         /// 文档总页数(菜单展示「P.3/200」用)。
         /// Optional:旧版本记录里没有这个字段,缺省解成 nil,老数据不丢
         var total: Int?
+        /// 封面是否单独一页(双页配对口径,2026-09-16)。
+        /// **必须 Optional**:非可选会在老记录上抛 keyNotFound,而解码是 `try?` ——
+        /// 整份字典会被当成空,用户的全部进度一次性丢失(与 total 同一个坑)
+        var coverAlone: Bool?
     }
 
     private let defaults: UserDefaults
@@ -58,12 +63,14 @@ struct ReadingProgress {
     // MARK: - 写
 
     /// 记录一次进度(每次翻页/换模式都会调;UserDefaults 写入足够廉价)。
-    /// `total` 缺省 nil:仅菜单展示用,老调用与老记录都不受影响
+    /// `total` / `coverAlone` 都带缺省:老调用与老记录都不受影响
     func save(key: String, page: Int, total: Int? = nil,
-              layout: String, direction: String, fitMode: String) {
+              layout: String, direction: String, fitMode: String,
+              coverAlone: Bool = false) {
         var dict = map()
         dict[key] = Entry(page: page, layout: layout, direction: direction,
-                          fitMode: fitMode, updatedAt: Date(), total: total)
+                          fitMode: fitMode, updatedAt: Date(), total: total,
+                          coverAlone: coverAlone)
         // LRU 上限:超限剔除最旧的条目
         if dict.count > Self.maxEntries {
             let oldest = dict.sorted { $0.value.updatedAt < $1.value.updatedAt }

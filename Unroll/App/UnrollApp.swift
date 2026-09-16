@@ -6,7 +6,7 @@
 //     拖拽由 ReaderView 根部的 dropDestination 承接(全阶段可用)。
 // M3:菜单命令体系(纯键盘可完成全部操作 —— M3 验收标准):
 //     文件菜单(⌘O 打开 / 最近打开,security-scoped bookmark 重开,§5.7);
-//     视图菜单(单页/双页 ⌘1/⌘2,左开/右开 ⇧⌘L/⇧⌘R,回到封面)。
+//     视图菜单(单页/双页 ⌘1/⌘2,封面单独一页 ⌥⌘C,左开/右开 ⇧⌘L/⇧⌘R,回到封面)。
 //     全屏 HUD、滚轮翻页在 ReaderView / HUDView 内实现。
 // M4:崩溃采集 L0 的会话标记(SwiftUI 无 applicationWillTerminate 对应物,
 //     故用 NSApplicationDelegateAdaptor 接 AppKit 回调,见 AppLifecycle);
@@ -100,6 +100,10 @@ struct UnrollApp: App {
                     reader.layout = .dual
                 }
                 .keyboardShortcut("2", modifiers: .command)
+                // 双页配对口径:日式单行本封面是独立一页,开着才是正确的摊
+                // (见 Core/SpreadPaging.swift 的口径说明)
+                Toggle(L10n.tr("app.menu.coverAlone"), isOn: $reader.coverAlone)
+                    .keyboardShortcut("c", modifiers: [.command, .option])
                 Divider()
                 Button(L10n.tr("reader.direction.ltr")) {
                     reader.direction = .leftToRight

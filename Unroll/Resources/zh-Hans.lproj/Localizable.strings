@@ -64,6 +64,7 @@
 "app.menu.view" = "视图";
 "reader.layout.single" = "单页";
 "reader.layout.dual" = "双页";
+"app.menu.coverAlone" = "封面单独一页";
 "reader.direction.ltr" = "从左往右读";
 "reader.direction.rtl" = "从右往左读(日漫)";
 "app.menu.firstPage" = "回到封面";
