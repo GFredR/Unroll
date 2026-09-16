@@ -1,0 +1,12 @@
+/* 开卷 / Unroll —— QuickLook 扩展文案(预览 + 缩略图两个 appex 共用)
+   与 App 的 Resources 分开维护:扩展是独立 bundle,NSLocalizedString 在扩展进程里
+   解析的是 .appex 自己的 lproj。目前只有 4 条,等扩展文案变多再考虑合表。 */
+
+/* 预览面板底部:总页数(首页预览下方的唯一信息) */
+"ql.pages" = "共 %ld 页";
+/* 加密归档:如实说明,不吞成通用错误(措辞与 App 内 §5.9 一致) */
+"ql.encrypted" = "此归档已加密。";
+/* 读不出来(损坏 / 无图片 / 非归档内容) */
+"ql.unreadable" = "无法预览此归档。";
+/* 单页但开卷能读:告诉用户下一步去哪(Finder 预览里唯一的转化入口) */
+"ql.openHint" = "用开卷打开可翻页阅读";

@@ -108,6 +108,15 @@ if [ -n "$MOUNT_OUT" ]; then
     hdiutil detach "$MOUNT_OUT" > /dev/null || true
     exit 1
   fi
+  # QuickLook 扩展必须真的在包里:装完从 dmg 拖进 /Applications 的人不会去查
+  # PlugIns,少一个扩展的后果是「Finder 空格没反应」——没人会想到是安装包的问题
+  APPEX_COUNT="$(find "$MOUNT_OUT/$APP_NAME.app/Contents/PlugIns" -maxdepth 1 -name '*.appex' 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${APPEX_COUNT:-0}" -lt 2 ]; then
+    echo "  ✗ dmg 内的 App 只带 $APPEX_COUNT 个扩展(期望 2:缩略图 + 预览)" >&2
+    hdiutil detach "$MOUNT_OUT" > /dev/null || true
+    exit 1
+  fi
+  echo "  扩展    : $APPEX_COUNT 个 appex ✓"
   hdiutil detach "$MOUNT_OUT" > /dev/null || true
 else
   echo "  ✗ dmg 挂载失败" >&2

@@ -42,6 +42,15 @@ targets:
       # App 只依赖 ArchiveKit 的 Swift 接口,不直接 import CArchiveShim
       # (AGENTS.md 七.4:依赖必须过抽象层,禁止全项目直接 import)
       - package: ArchiveKit
+      # QuickLook 扩展(2026-09-16):两个 appex 嵌进 Contents/PlugIns/。
+      # build-app.sh 由内向外重新签名并对「扩展点标识 / 架构 / 签名」做硬校验 ——
+      # 漏嵌或签错的症状很隐蔽(Finder 空格直接没反应,不报错)
+      - target: UnrollQuickLookThumbnail
+        embed: true
+        codeSign: true          # CodeSignOnCopy:嵌入时按宿主身份重签,别留 build 目录里的签名
+      - target: UnrollQuickLookPreview
+        embed: true
+        codeSign: true
     info:
       path: Unroll/Info.plist
       properties:
@@ -136,8 +145,9 @@ targets:
     scheme:
       testTargets:
         - UnrollTests
-        # 主 scheme ⌘U 一键跑全部测试:App 层 + 逻辑层 + 包内 C 桥接冒烟
+        # 主 scheme ⌘U 一键跑全部测试:App 层 + 逻辑层 + QuickLook 共享逻辑 + 包内 C 桥接冒烟
         - UnrollLogicTests
+        - UnrollQuickLookTests
         - package: ArchiveKit/ArchiveKitTests
       run:
         environmentVariables:
@@ -172,6 +182,153 @@ targets:
       base:
         GENERATE_INFOPLIST_FILE: YES
 
+  # ------------------------------------------------- QuickLook 扩展(2026-09-16)
+  # 设计文档 §2.4 v2 候选池落地:Finder 里空格预览首页 + 图标显示封面。
+  # 为什么是两个 target:QuickLook 的扩展点标识(NSExtensionPointIdentifier)
+  # 一个 appex 只能声明一个 —— 预览与缩略图是两个扩展点,只能拆成两个 appex。
+  # 共用逻辑放 UnrollQuickLook/Shared/(各自编译一份,几百字节,好过三方 framework)。
+  #
+  # 为什么只声明 cb* 四种 UTI:裸 zip/rar/7z 在 App 侧只是 Alternate 关联,**不抢**
+  # 系统默认;扩展若也去认 public.zip-archive,等于让每个普通 zip 都走我们的封面
+  # 预览(非图片 zip 会显示"无法预览",比系统默认图标更糟)。
+  UnrollQuickLookThumbnail:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: UnrollQuickLook/Shared
+      - path: UnrollQuickLook/Thumbnail
+      # 复用 App 的 L10n(零依赖小文件,避免两套实现);扩展进程里
+      # NSLocalizedString 解析的是 .appex 自己的 lproj
+      - path: Unroll/Core/L10n.swift
+    dependencies:
+      - package: ArchiveKit
+    info:
+      path: UnrollQuickLook/Thumbnail/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: Unroll
+        CFBundlePackageType: XPC!
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.thumbnail
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ThumbnailProvider
+          # 关键:Xcode 的 QuickLook 模板里这段就是靠 QLSupportedContentTypes 声明
+          # 「本扩展认哪些 UTI」。缺了它扩展照样能被加载,但系统不会把 cbz 路由过来
+          # —— 症状是 qlmanage/QLThumbnailGenerator 只报 "Could not generate a
+          # thumbnail"(code 102),没有一行日志指向缺少声明(2026-09-16 实测踩到)
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - com.gfredr.unroll.cbz
+              - com.gfredr.unroll.cbr
+              - com.gfredr.unroll.cb7
+              - com.gfredr.unroll.cbt
+            QLThumbnailMinimumDimension: 16
+        # 让扩展能解析 App 导出的自定义 UTI(用 Imported 而非 Exported:
+        # 导出权归 App,扩展只是引用,两边都 Exported 会打架)
+        UTImportedTypeDeclarations: &quickLookImportedUTIs
+          - UTTypeIdentifier: com.gfredr.unroll.cbz
+            UTTypeDescription: Comic Book ZIP Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbz]
+          - UTTypeIdentifier: com.gfredr.unroll.cbr
+            UTTypeDescription: Comic Book RAR Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbr]
+          - UTTypeIdentifier: com.gfredr.unroll.cb7
+            UTTypeDescription: Comic Book 7z Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cb7]
+          - UTTypeIdentifier: com.gfredr.unroll.cbt
+            UTTypeDescription: Comic Book TAR Archive
+            UTTypeConformsTo: [public.data, public.archive]
+            UTTypeTagSpecification:
+              public.filename-extension: [cbt]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Comic Book Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: None
+            LSItemContentTypes:
+              [com.gfredr.unroll.cbz, com.gfredr.unroll.cbr,
+               com.gfredr.unroll.cb7, com.gfredr.unroll.cbt]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gfredr.unroll.quicklook.thumbnail
+        CODE_SIGN_ENTITLEMENTS: UnrollQuickLook/Thumbnail/UnrollQuickLookThumbnail.entitlements
+        SKIP_INSTALL: YES          # 扩展是嵌进 App 的,不单独安装
+
+  UnrollQuickLookPreview:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: UnrollQuickLook/Shared
+      - path: UnrollQuickLook/Preview
+      - path: Unroll/Core/L10n.swift
+    dependencies:
+      - package: ArchiveKit
+    info:
+      path: UnrollQuickLook/Preview/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleExecutable: $(EXECUTABLE_NAME)
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleDisplayName: Unroll
+        CFBundlePackageType: XPC!
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.quicklook.preview
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).PreviewViewController
+          NSExtensionAttributes:
+            QLSupportedContentTypes:
+              - com.gfredr.unroll.cbz
+              - com.gfredr.unroll.cbr
+              - com.gfredr.unroll.cb7
+              - com.gfredr.unroll.cbt
+            QLSupportsSearchableItems: false
+        UTImportedTypeDeclarations: *quickLookImportedUTIs
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Comic Book Archive
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: None
+            LSItemContentTypes:
+              [com.gfredr.unroll.cbz, com.gfredr.unroll.cbr,
+               com.gfredr.unroll.cb7, com.gfredr.unroll.cbt]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.gfredr.unroll.quicklook.preview
+        CODE_SIGN_ENTITLEMENTS: UnrollQuickLook/Preview/UnrollQuickLookPreview.entitlements
+        SKIP_INSTALL: YES
+
+  # ----------------------------------- QuickLook 扩展共享逻辑单测(2026-09-16)
+  # 为什么需要它:appex 由系统(quicklookd)按需拉起,无头环境里连 pluginkit 查询
+  # 都可能被拒 —— 「扩展有没有被系统调用」在沙箱内无法判定。但扩展里会写错的
+  # 是「打开归档 → 取首页 → 降采样」这段纯逻辑,把 Shared/ 的源码编进本 target
+  # 就能直接测。于是验证边界被明确切开:
+  #   · 决策逻辑 → 本 target(明文/加密/损坏/无图/缺文件/降采样上限)
+  #   · appex 管道 → build-app.sh 的硬校验 + Scripts/verify-quicklook.sh 真机复核
+  # 只收 CoverProvider.swift 一个文件(不要整个 Shared/,否则会把 lproj 资源也拖进来)
+  UnrollQuickLookTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: UnrollQuickLookTests
+      - path: UnrollQuickLook/Shared/CoverProvider.swift
+    dependencies:
+      - package: ArchiveKit
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+
 # ---------------------------------------------------------------------------
 # 附加 scheme。主 scheme「Unroll」已挂在 target 上(Run + Test + Archive);
 # 这里按「快/慢分离」原则再补两个:
@@ -186,10 +343,12 @@ schemes:
     build:
       targets:
         UnrollLogicTests: all
+        UnrollQuickLookTests: all
     test:
       config: Debug
       targets:
         - UnrollLogicTests
+        - UnrollQuickLookTests
         # XcodeGen 语法:package: {本地包名}/{包内测试target名}
         - package: ArchiveKit/ArchiveKitTests
 

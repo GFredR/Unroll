@@ -63,6 +63,33 @@ fi
 
 cp -R "$SRC_APP" "$APP_DIR"
 
+# ------------------------------------------------------ 嵌套代码签名 --
+# 由内向外:先签 Contents/PlugIns/ 里的 QuickLook 扩展,再签 App 本身。
+# 顺序反了(先签外层)会让外层签名当场失效 —— 嵌套代码校验要求子签名早于父签名。
+# 为什么必须重签:Xcode 归档时扩展是按自身 target 的设置签的,而本脚本允许用
+#   SIGN_IDENTITY 覆盖身份(默认 ad-hoc);不重签就会出现「扩展与外层身份不一致」,
+#   Finder 会静默拒绝加载扩展(空格预览毫无反应,不报任何错 —— 最难查的一类故障)。
+PLUGINS="$APP_DIR/Contents/PlugIns"
+
+sign_appex() {
+  local name="$1" ent="$2"
+  local appex="$PLUGINS/$name.appex"
+  [ -d "$appex" ] || { echo "✗ 缺少 $name.appex(Xcode 未嵌入扩展?)" >&2; exit 1; }
+  [ -f "$ent" ] || { echo "✗ 缺少 entitlements:$ent" >&2; exit 1; }
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
+    --entitlements "$ent" "$appex"
+}
+
+echo "→ 由内向外签名(先扩展后 App)"
+if [ -d "$PLUGINS" ]; then
+  sign_appex UnrollQuickLookThumbnail UnrollQuickLook/Thumbnail/UnrollQuickLookThumbnail.entitlements
+  sign_appex UnrollQuickLookPreview   UnrollQuickLook/Preview/UnrollQuickLookPreview.entitlements
+  codesign --force --sign "$SIGN_IDENTITY" --timestamp=none \
+    --entitlements Unroll/Unroll.entitlements "$APP_DIR"
+else
+  echo "  ⚠️ 未找到 Contents/PlugIns/ —— QuickLook 扩展未嵌入(下方校验会拦下)" >&2
+fi
+
 # ------------------------------------------------------------------ 校验 --
 echo ""
 echo "→ 校验"
@@ -106,6 +133,52 @@ if [ ! -f "$APP_DIR/Contents/Resources/AppIcon.icns" ]; then
   exit 1
 fi
 echo "  图标    : AppIcon.icns ✓"
+
+# QuickLook 扩展:漏嵌 / 扩展点写错 / 缺架构,症状都是「Finder 里空格毫无反应、
+# 图标还是通用图标」—— 不报错、不崩,只能靠人偶然发现。所以这里逐项硬校验
+echo "  扩展    :"
+for entry in "UnrollQuickLookThumbnail:com.apple.quicklook.thumbnail" \
+             "UnrollQuickLookPreview:com.apple.quicklook.preview"; do
+  EXT_NAME="${entry%%:*}"
+  EXT_WANT="${entry##*:}"
+  EXT_DIR="$PLUGINS/$EXT_NAME.appex"
+  if [ ! -d "$EXT_DIR" ]; then
+    echo "    ✗ 缺少 $EXT_NAME.appex —— Finder 缩略图/空格预览会直接没反应(不报错)" >&2
+    exit 1
+  fi
+  EXT_GOT="$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionPointIdentifier' \
+             "$EXT_DIR/Contents/Info.plist" 2>/dev/null || echo '(缺)')"
+  if [ "$EXT_GOT" != "$EXT_WANT" ]; then
+    echo "    ✗ $EXT_NAME 扩展点错误:期望 $EXT_WANT,实际 $EXT_GOT" >&2
+    exit 1
+  fi
+  EXT_ARCHS="$(lipo -archs "$EXT_DIR/Contents/MacOS/$EXT_NAME" 2>/dev/null || echo '(无二进制)')"
+  for want_arch in arm64 x86_64; do
+    case " $EXT_ARCHS " in
+      *" $want_arch "*) ;;
+      *) echo "    ✗ $EXT_NAME 缺架构 $want_arch($EXT_ARCHS)—— 扩展也必须 Universal 2" >&2
+         exit 1 ;;
+    esac
+  done
+  # QLSupportedContentTypes 决定系统把哪些 UTI 路由到这个扩展。缺了它扩展仍会被
+  # 加载,但任何 cbz 都不会送进来 —— 现场只报 "Could not generate a thumbnail"
+  # (code 102),没有一行日志指出是声明缺失(2026-09-16 实测踩到)
+  EXT_TYPES="$(/usr/libexec/PlistBuddy -c 'Print :NSExtension:NSExtensionAttributes:QLSupportedContentTypes' \
+               "$EXT_DIR/Contents/Info.plist" 2>/dev/null || true)"
+  if [ -z "$EXT_TYPES" ]; then
+    echo "    ✗ $EXT_NAME 未声明 QLSupportedContentTypes —— 系统不会把 cbz 路由过来" >&2
+    exit 1
+  fi
+  echo "    $EXT_NAME ✓ $EXT_WANT · $EXT_ARCHS · 认 $(printf '%s\n' "$EXT_TYPES" | grep -c 'com.gfredr' || true) 种 UTI"
+done
+
+# 嵌套代码校验:--verify --strict 会一路校验到 PlugIns 里的扩展。
+# 这一步是上面「由内向外签名」的验收,也是扩展能被 Finder 加载的前提
+if ! codesign --verify --strict "$APP_DIR" 2>/dev/null; then
+  echo "  ✗ 签名校验失败(嵌套代码未按由内向外签名?)—— Finder 会拒绝加载扩展" >&2
+  exit 1
+fi
+echo "  签名校验: codesign --verify --strict ✓(含嵌套扩展)"
 
 echo ""
 echo "✓ 生成 $APP_DIR"

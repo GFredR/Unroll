@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- 沙盒:嵌入 App 的扩展必须与 App 一样开启沙盒 -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- 只读访问「用户选中的文件」。QuickLook 宿主通常会把被预览文件的读取权
+         以沙盒扩展形式交给扩展,但那条路依赖宿主实现;显式声明只读权限更稳妥,
+         也仍然是只读 —— 看图器/预览器没有任何写文件的需求(2026-09-16) -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+</dict>
+</plist>

@@ -8,6 +8,9 @@ xcuserdata/
 # xcodegen 生成物:project.yml 才是唯一真源,改完配置跑 Scripts/regen.sh
 *.xcodeproj/
 Unroll/Info.plist
+# QuickLook 两个 appex 的 Info.plist 同样是 project.yml 里 info: 段生成的
+# (内容是未展开的 $(PRODUCT_MODULE_NAME),由 Xcode 在构建期展开)
+UnrollQuickLook/*/Info.plist
 
 # SwiftPM
 .build/
