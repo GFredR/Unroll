@@ -20,7 +20,7 @@
 - **Finder 集成（QuickLook）**:按空格预览封面 + 总页数,文件图标直接显示封面,不必先打开 App。两个扩展(缩略图 + 预览)随 App 一起分发;加密/读不出来的归档刻意退回系统默认图标,不挂误导性占位图;只认 cbz/cbr/cb7/cbt,不碰裸 zip
 - 加密归档三态呈现:无 / 部分页占位卡片 / 整档说明,绝不闪退
 - 崩溃采集 L0:零依赖零后端,异常退出自愿上报(App 自身零网络请求)
-- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.7 MB(其中绝大多数是 Universal 2 二进制与两个 Finder 扩展)
+- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.8 MB(其中绝大多数是 Universal 2 二进制与两个 Finder 扩展)
 - **产物可自证来源**:App 内记有构建时的提交号,拿到 dmg 的人不必只信 SHA256 —— 打开包里的 `Info.plist` 就能核对这个二进制对应哪个公开提交。本项目没有付费签名,这是一条可以自查的信任锚
 
 **English**
@@ -39,7 +39,7 @@
 - **Quick Look integration**: press Space in Finder to preview the cover and page count, and let the file icon show the actual cover — no need to open the app. Two extensions (thumbnail + preview) ship inside the app; encrypted or unreadable archives deliberately fall back to the system icon instead of a misleading placeholder; only cbz/cbr/cb7/cbt are claimed, never plain zip
 - Encrypted archives rendered in three states: none / placeholder cards for locked pages / explanation — never crashes
 - Crash reporting L0: zero dependencies, zero backend, voluntary upload (the app itself makes no network requests)
-- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.7 MB (mostly the Universal 2 binary plus the two Finder extensions)
+- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.8 MB (mostly the Universal 2 binary plus the two Finder extensions)
 - **The build can prove its own origin**: the app records the commit it was built from, so a downloader does not have to take the SHA256 on faith — read `Info.plist` inside the bundle and check which public commit this binary corresponds to. With no paid signing certificate in play, that is a trust anchor you can verify yourself
 
 ## 1.0.0 — 2026-09-15（仅本机打标，从未发布 / tagged locally, never published）
