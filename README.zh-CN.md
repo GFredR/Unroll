@@ -116,7 +116,7 @@ cd ArchiveKit && swift test
 
 ```bash
 ./Scripts/build-app.sh     # → ../Unroll-dist/Unroll.app
-./Scripts/make-dmg.sh      # → ../Unroll-dist/Unroll-1.0.0.dmg
+./Scripts/make-dmg.sh      # → ../Unroll-dist/Unroll-<version>.dmg
 ```
 
 两个脚本都刻意把产物写到仓库之外——把 `.app`、`.dmg` 和 DerivedData 留在源码树里，会让 Xcode 和 Spotlight 每次打开工程都去遍历它们。

@@ -118,11 +118,27 @@ echo "  沙盒    : $(codesign -d --entitlements :- "$APP_DIR" 2>/dev/null | gre
 echo "  最低系统: $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO")"
 
 # 文件关联是「双击即用」的命脉:漏了 UTI,装完也抢不到默认打开权
-UTI_COUNT="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$INFO" 2>/dev/null | grep -c 'UTTypeIdentifier' || true)"
+#
+# 校验的是**具体标识符在不在**,不是数量。2026-09-16 复查发现问题:原先只卡
+# 「UTI ≥ 4 且文档类型 ≥ 5」的数量下限,而自 2026-09-14 新增裸 .rar / .7z 关联后
+# 实际已是 6 / 7 —— 此时若 cbz 声明被误删而 rar/7z 还在,计数为 5,照样通过。
+# 这正是这道防线本该拦住的沉默故障(装完看着正常,双击 .cbz 没反应)。
+UTI_LIST="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$INFO" 2>/dev/null || true)"
+UTI_COUNT="$(printf '%s\n' "$UTI_LIST" | grep -c 'UTTypeIdentifier' || true)"
 DOC_COUNT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes' "$INFO" 2>/dev/null | grep -c 'CFBundleTypeName' || true)"
-echo "  文件关联: 导出 UTI $UTI_COUNT 个 / 文档类型 $DOC_COUNT 个"
-if [ "${UTI_COUNT:-0}" -lt 4 ] || [ "${DOC_COUNT:-0}" -lt 5 ]; then
-  echo "  ✗ 文件关联声明不全(cbz/cbr/cb7/cbt + zip Alternate),装完无法双击打开" >&2
+echo "  文件关联: 导出 UTI ${UTI_COUNT:-0} 个 / 文档类型 ${DOC_COUNT:-0} 个"
+
+MISSING_UTI=""
+for U in cbz cbr cb7 cbt; do
+  printf '%s\n' "$UTI_LIST" | grep -q "UTTypeIdentifier = com.gfredr.unroll.$U\$" || MISSING_UTI="$MISSING_UTI $U"
+done
+if [ -n "$MISSING_UTI" ]; then
+  echo "  ✗ 缺导出 UTI 声明:$MISSING_UTI —— 装完无法双击打开对应格式" >&2
+  exit 1
+fi
+# 文档类型数量只做宽松下限(防止关联表整体塌掉);具体格式由上面的标识符校验负责
+if [ "${DOC_COUNT:-0}" -lt 5 ]; then
+  echo "  ✗ 文档类型声明过少($DOC_COUNT 个)—— 至少需 cbz/cbr/cb7/cbt + zip Alternate" >&2
   exit 1
 fi
 

@@ -117,7 +117,7 @@ To produce a distributable build (Universal 2: arm64 + x86_64) and a DMG:
 
 ```bash
 ./Scripts/build-app.sh     # → ../Unroll-dist/Unroll.app
-./Scripts/make-dmg.sh      # → ../Unroll-dist/Unroll-1.0.0.dmg
+./Scripts/make-dmg.sh      # → ../Unroll-dist/Unroll-<version>.dmg
 ```
 
 Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` and DerivedData out of the source tree keeps Xcode and Spotlight from crawling them on every open.
