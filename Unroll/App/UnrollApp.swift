@@ -43,7 +43,13 @@ struct UnrollApp: App {
                 .onOpenURL { url in
                     openArchive(url: url)
                 }
-                .onAppear { reloadRecents(probe: true) }
+                .onAppear {
+                    reloadRecents(probe: true)
+                    #if DEBUG
+                    // 仅调试构建:launch argument `-demoScript` 时按时间轴自动演示(录 GIF 用)
+                    DemoDriver.startIfNeeded(on: reader)
+                    #endif
+                }
                 // 翻页后刷新进度索引:最近打开菜单里的「P.3/200」要跟得上阅读位置
                 .onChange(of: reader.pageIndex) { _, _ in reloadRecents() }
                 // M4:启动 1.5s 后自检「上次是否异常退出」,是则问一次(§5.10.5-①)

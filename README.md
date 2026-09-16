@@ -13,6 +13,8 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 
 ![Unroll demo](docs/demo.gif)
 
+*Cover → single page → two-page spread, recorded straight from the app in full screen. The pages are generated placeholders, not a real comic.*
+
 ## Features
 
 - **Reads straight from the archive** — nothing is ever extracted to disk, no thumbnail database is built, no "library" is imported. Open a file, read it, quit.
@@ -30,6 +32,19 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Encrypted archives are handled honestly** — detected up front, reported clearly, never a crash. See below.
 - **Native SwiftUI, macOS 14+, sandboxed, and with no network permission at all.**
 
+## Measured performance
+
+The numbers below come from a benchmark that drives the real page pipeline through a 200-page archive and samples `phys_footprint` after every page ([`UnrollTests/BigSampleBenchTests.swift`](UnrollTests/BigSampleBenchTests.swift)), so they measure the shipping path rather than a synthetic loop:
+
+| Archive | Pages | Peak memory | Per page |
+| --- | --- | --- | --- |
+| `.cbz` (ZIP) | 200 | **0.15 GB** | 2.6 ms |
+| `.cb7` (solid 7z) | 200 | **0.06 GB** | 2.4 ms |
+
+Sitting on page 1 of a **437 MB** archive, the shipped app holds **183 MB** resident. The app itself is **928 KB** on disk.
+
+The number worth reading twice is the one behind the sequential scanner. Reopening the archive for each page — the obvious way to build this — is **71× slower** by page 150 on a solid 7z archive, and the gap widens as the archive grows, because solid compression means every page drags the ones before it. That is why pages are pulled through a single streaming pass instead.
+
 ## Supported formats
 
 | Extension | Container | Status |
@@ -44,6 +59,8 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 When an archive holds no images, or the file is damaged or isn't an archive at all, you get a specific message rather than an empty window.
 
 ## Encrypted archives
+
+![An encrypted archive, reported honestly instead of failing silently](docs/shot-encrypted-en.png)
 
 There are three distinct cases, and they are reported differently because the underlying truth is different:
 
@@ -144,9 +161,11 @@ Unroll/
 ├── ArchiveKit/     # Local SwiftPM package — archive reading, zero UI (reusable)
 ├── UnrollTests/            # App-hosted unit tests
 ├── UnrollLogicTests/       # Fast logic-only tests
-├── Scripts/        # regen / build-app / make-dmg
+├── Scripts/        # regen / build-app / make-dmg / demo sample / GIF recording
 └── project.yml     # xcodegen source of truth
 ```
+
+The reasoning behind these boundaries — and the decisions that shaped them — is in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Support this project
 
