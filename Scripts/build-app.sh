@@ -21,6 +21,24 @@ cd "$ROOT_DIR"
 DIST_DIR="${DIST_DIR:-${ROOT_DIR}-dist}"
 mkdir -p "$DIST_DIR"
 
+# ----------------------------------------------- 产物↔源码绑定(2026-09-16) --
+# 发布链要回答一个问题:「这个 .app 是从哪份源码构建的?」
+# 早期用文件 mtime 回答(产物不早于源码最后一次提交时间),但那条判据有**假阳性**:
+# 自然顺序是「先改源码 → 构建 → 提交」,构建必然发生在提交之前 —— 于是自己刚建好
+# 的产物会被自己的守卫拦下(2026-09-16 实测,方向完全反了)。
+# 现在改为**内容判据**:构建时把 HEAD 提交号写进 buildinfo 侧车文件,发布前检只比
+# 字符串相等,时间不再参与任何判断。
+COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
+GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+# dirty 只看**已跟踪**文件:Unroll.xcodeproj 与两个 appex 的 Info.plist 都是
+# xcodegen 生成物、已在 .gitignore 里,不该因为「构建过程重写了它们」就把一次
+# 干净构建判成脏构建(那会让守卫长期误报,人就会开始忽略它)。
+if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+  COMMIT_DIRTY=1
+else
+  COMMIT_DIRTY=0
+fi
+
 APP_NAME="Unroll"
 SCHEME="${SCHEME:-Unroll-Distribution}"
 
@@ -62,6 +80,17 @@ if [ ! -d "$SRC_APP" ]; then
 fi
 
 cp -R "$SRC_APP" "$APP_DIR"
+
+# 把提交号刻进 bundle —— 这是「产物↔源码」绑定的载体。
+# · 必须写在**签名之前**:签名覆盖 Info.plist,签完再改会让 codesign --verify 直接失败;
+# · 也不能写进 project.yml 的 info: 段 —— 那个文件里放不了「本次构建的头号」这种
+#   随构建变化的值,只能在这里注入。
+# 顺带的好处:拿到 dmg 的人不必信我们,直接
+#   /usr/libexec/PlistBuddy -c 'Print :UnrollSourceCommit' Unroll.app/Contents/Info.plist
+# 就知道这个二进制对应哪个公开提交。
+APP_PLIST="$APP_DIR/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Add :UnrollSourceCommit string $COMMIT" "$APP_PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :UnrollSourceCommit $COMMIT" "$APP_PLIST"
 
 # ------------------------------------------------------ 嵌套代码签名 --
 # 由内向外:先签 Contents/PlugIns/ 里的 QuickLook 扩展,再签 App 本身。
@@ -111,6 +140,19 @@ echo "  版本    : $BUILT_VERSION"
 if [ "$BUILT_VERSION" != "$VERSION" ]; then
   echo "  ✗ 版本号不一致(期望 $VERSION)" >&2
   exit 1
+fi
+
+# 刻进去的提交号必须等于当前 HEAD。不相等只有一种可能:注入被跳过或被覆盖 ——
+# 那之后整条「产物↔源码」链的根就断了,侧车写出来的也将是假的。所以在这里钉死。
+COMMIT_IN_APP="$(/usr/libexec/PlistBuddy -c 'Print :UnrollSourceCommit' "$INFO" 2>/dev/null || echo '(缺)')"
+if [ "$COMMIT_IN_APP" != "$COMMIT" ]; then
+  echo "  ✗ bundle 内提交号与当前 HEAD 不一致:bundle=$COMMIT_IN_APP, HEAD=$COMMIT" >&2
+  exit 1
+fi
+if [ "$COMMIT_DIRTY" = "1" ]; then
+  echo "  源码提交: ${COMMIT:0:7}(⚠️ 工作区有未提交改动,此产物不宜发布)"
+else
+  echo "  源码提交: ${COMMIT:0:7}"
 fi
 
 echo "  签名    : $(codesign -dv "$APP_DIR" 2>&1 | grep -m1 'Signature=' || echo '(无)')"
@@ -196,8 +238,25 @@ if ! codesign --verify --strict "$APP_DIR" 2>/dev/null; then
 fi
 echo "  签名校验: codesign --verify --strict ✓(含嵌套扩展)"
 
+# ---------------------------------------------------------------- buildinfo --
+# 侧车文件,与 .app 同级。发布前检(publish.sh)与打包脚本(make-dmg.sh)读它,
+# 不再依赖任何文件时间戳。键值格式故意做成最朴素的一行一个 key=value ——
+# 用 sed 就能读,不必引入 jq / plist。
+BUILDINFO="$DIST_DIR/$APP_NAME.buildinfo"
+{
+  echo "app=$APP_NAME"
+  echo "version=$BUILT_VERSION"
+  echo "commit=$COMMIT"
+  echo "branch=$GIT_BRANCH"
+  echo "dirty=$COMMIT_DIRTY"
+  echo "archs=$ARCHS_BUILT"
+  echo "identity=$SIGN_IDENTITY"
+  echo "built=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+} > "$BUILDINFO"
+
 echo ""
 echo "✓ 生成 $APP_DIR"
+echo "  → buildinfo: $BUILDINFO(commit ${COMMIT:0:7} / dirty=$COMMIT_DIRTY)"
 echo "  → open $APP_DIR"
 echo "  → 打 dmg: ./Scripts/make-dmg.sh"
 if [ "$SIGN_IDENTITY" = "-" ]; then

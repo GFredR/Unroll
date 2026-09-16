@@ -12,7 +12,8 @@
 #   看起来完全正常,指向的却是不含最新修复的提交。这类问题必须挡在推送之前。
 #
 # 前检覆盖:gh 登录态 / 提交身份是否匿名 / 历史里有没有混入真实身份 /
-#           工作区干净度 / tag 是否指向 HEAD / DMG 与 SHA256 / 发布说明 /
+#           工作区干净度 / tag 与源码对齐 / DMG 与 SHA256 /
+#           产物↔源码绑定(buildinfo:commit / dirty / 哈希三链) / 发布说明 /
 #           受版本控制文件里有没有本机路径与私人邮箱
 # ============================================================================
 set -euo pipefail
@@ -125,6 +126,12 @@ step "[4/8] 工作区与 tag 对齐"
 SHIPPING_PATHS=(Unroll ArchiveKit UnrollQuickLook project.yml Scripts/gen_appicon.swift
                 ':(exclude)ArchiveKit/Tests')
 
+# 影响**产物**的路径 = 源码 + 打包脚本。第 5 步的产物↔源码判据用这个超集:
+# 改一行 make-dmg.sh 同样会让现有 dmg 不再代表当前状态 —— 2026-09-16 实测撞上过
+# 一次(打包脚本加了 .fseventsd 隐藏与布局告警,而 dmg 是改之前建的,里面一个都没有)。
+# 第 4 步不用它:tag 表达的是「源码版本」,不该被一次打包脚本微调逼着移动。
+ARTIFACT_PATHS=("${SHIPPING_PATHS[@]}" Scripts/build-app.sh Scripts/make-dmg.sh)
+
 DIRTY="$(git status --porcelain)"
 if [ -z "$DIRTY" ]; then
     ok "工作区干净"
@@ -170,27 +177,65 @@ else
     fail "缺 $DMG —— 先跑:./Scripts/make-dmg.sh"
 fi
 
-# 产物必须由**当前的源码与打包脚本**生成。这里挡的是一类最隐蔽的沉默不一致:
-# 源码变了(或打包脚本变了)却没重建 —— tag 没变、sha256 自洽、Release 页面正常,
-# 唯独产物里少了这次的改动。
-#   2026-09-16 实测撞上两次:① 打包脚本改完(.fseventsd 隐藏 + 布局告警)旧 dmg 里
-#   一个都没有;② 加了「另存当前页 / 可拖进度条」却没重建 —— 后者的失效形式更糟:
-#   发出去的包没有新功能,而所有自动化检查都是绿的。
-BUILD_INPUTS=("${SHIPPING_PATHS[@]}" Scripts/build-app.sh Scripts/make-dmg.sh)
+# 产物必须由**当前的源码**生成。这里挡的是一类最隐蔽的沉默不一致:
+# 源码变了却没重建 —— tag 没变、sha256 自洽、Release 页面正常,唯独产物里少了
+# 这次的改动。2026-09-16 实测撞上两次:① 打包脚本改完(.fseventsd 隐藏 + 布局
+# 告警)旧 dmg 里一个都没有;② 加了「另存当前页 / 可拖进度条」却没重建 ——
+# 后者的失效形式更糟:发出去的包没有新功能,而所有自动化检查都是绿的。
+#
+# 判据是**内容**,不是时间(2026-09-16 修订,推翻本脚本上一版):
+#   ⚠️ 上一版写的是「产物 mtime ≥ 源码最后一次提交时间」。它有一个必然发生的
+#   假阳性:开发的自然顺序是「先改源码 → 构建 → 提交」,构建发生在提交之前,
+#   于是刚刚亲手建好的产物会被自己的守卫拦下 —— 守卫方向完全反了。
+#   正确的绑定方式是在构建时把 HEAD 写进侧车文件,前检只比字符串。
+#
+# 三条判据(缺一不可,各自防不同的失效):
+#   ① 侧车记录的 commit == **最后一次改动源码的提交**  → 产物来自当前这份源码
+#   ② 侧车记录的 dirty == 0                          → 构建时工作区干净(没有未提交改动被编进去)
+#   ③ 侧车记录的 SHA256 == DMG 实际哈希              → 侧车描述的确实是这个文件
+#
+# ① 为什么比的是「最后一次改动源码的提交」而不是 HEAD:
+#   那条规则会让「构建完再补一笔文档提交」把好产物判死 —— 而文档提交根本不进
+#   二进制(第 4 步已经用同一份 SHIPPING_PATHS 表达过这个区分)。判据必须问的是
+#   "产物代表当前源码吗",而不是"产物代表 HEAD 吗"。
+#   例:buildinfo.commit=A,之后提了一笔只改 README 的 B → 最后一次改动源码的提交
+#   仍是 A → 放行(正确);若 B 改了 Unroll/ 下任何文件 → 变成 B ≠ A → 拦下(正确)。
+#
+# ③ 是关键补位:①② 只说明「当时构建的是这个提交」,却拦不住
+#   「侧车是旧的、DMG 也被回滚成旧的那份」(两者恰好都自洽)。而任何一次重建都会
+#   产生新哈希,旧侧车里写的是旧哈希 —— 只有哈希能把侧车与产物文件钉在一起。
+DMG_INFO="$DMG.buildinfo"
+if [ ! -f "$DMG_INFO" ]; then
+    fail "缺 $(basename "$DMG_INFO") —— 无法确认产物来自哪个提交"
+    echo "      → 重跑:./Scripts/make-dmg.sh(新脚本会写侧车文件)" >&2
+else
+    INFO_COMMIT="$(sed -n 's/^commit=//p' "$DMG_INFO" | head -1)"
+    INFO_DIRTY="$(sed -n 's/^dirty=//p' "$DMG_INFO" | head -1)"
+    INFO_SHA="$(sed -n 's/^dmg_sha256=//p' "$DMG_INFO" | head -1)"
+    INFO_BUILT="$(sed -n 's/^built=//p' "$DMG_INFO" | head -1)"
+    SHIPPING_HEAD="$(git log -1 --format=%H -- "${ARTIFACT_PATHS[@]}" 2>/dev/null || true)"
 
-if [ -n "$(git status --porcelain -- "${BUILD_INPUTS[@]}")" ]; then
-    fail "源码或打包脚本有未提交改动 —— 现有产物必然不代表当前代码"
-fi
-
-if [ -f "$DMG" ]; then
-    INPUT_TS="$(git log -1 --format=%ct -- "${BUILD_INPUTS[@]}" 2>/dev/null || echo 0)"
-    DMG_TS="$(stat -f %m "$DMG" 2>/dev/null || echo 0)"
-    if [ "${DMG_TS:-0}" -ge "${INPUT_TS:-0}" ]; then
-        ok "产物不早于源码 / 打包脚本的最后一次提交"
+    if [ -n "$SHIPPING_HEAD" ] && [ "$INFO_COMMIT" = "$SHIPPING_HEAD" ]; then
+        ok "产物来自当前源码(${INFO_COMMIT:0:7},构建于 $INFO_BUILT)"
     else
-        fail "源码或打包脚本在产物生成之后被改过 —— 产物不含这次的改动"
-        echo "      最后一次改动:$(git log -1 --format='%h %s(%cr)' -- "${BUILD_INPUTS[@]}")" >&2
-        echo "      → 重跑:./Scripts/build-app.sh && ./Scripts/make-dmg.sh" >&2
+        fail "产物不是当前源码构建的(产物 ${INFO_COMMIT:0:7} / 源码 ${SHIPPING_HEAD:0:7})"
+        echo "      产物里没有最后一次源码改动的提交 —— 重跑:./Scripts/build-app.sh && ./Scripts/make-dmg.sh" >&2
+    fi
+
+    case "$INFO_DIRTY" in
+        0) ok "构建时工作区干净(无未提交改动被编进产物)" ;;
+        *) fail "产物构建时工作区是脏的 —— 有未提交改动被编进了这个二进制" ;;
+    esac
+
+    if [ -f "$DMG" ]; then
+        ACTUAL_SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+        if [ "$INFO_SHA" = "$ACTUAL_SHA" ]; then
+            ok "侧车哈希与 DMG 一致(${ACTUAL_SHA:0:12}…)—— 侧车描述的确实是这个文件"
+        else
+            fail "侧车哈希与 DMG 实际哈希不符 —— 侧车是旧产物留下的,或 DMG 被换过"
+            echo "      侧车 ${INFO_SHA:0:12}… / 实际 ${ACTUAL_SHA:0:12}…" >&2
+            echo "      → 重跑:./Scripts/make-dmg.sh" >&2
+        fi
     fi
 fi
 

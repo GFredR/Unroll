@@ -46,6 +46,22 @@ if [ ! -d "$APP_DIR" ]; then
   ./Scripts/build-app.sh
 fi
 
+# 1.2 读 .app 的 buildinfo:本次打包的 App 属于哪个提交
+#     之所以不让 dmg 侧车自己去问 git:dmg 里装的是**这份 .app**,而不是「当前源码」。
+#     两者在「只重建了 app 没重建 dmg」或反过来时会分叉,而分叉正是要抓的东西。
+APP_BUILDINFO="$DIST_DIR/$APP_NAME.buildinfo"
+if [ -f "$APP_BUILDINFO" ]; then
+  APP_COMMIT="$(sed -n 's/^commit=//p' "$APP_BUILDINFO" | head -1)"
+  APP_DIRTY="$(sed -n 's/^dirty=//p' "$APP_BUILDINFO" | head -1)"
+  APP_COMMIT="${APP_COMMIT:-unknown}"
+  APP_DIRTY="${APP_DIRTY:-1}"
+else
+  echo "  ! 缺 $APP_NAME.buildinfo —— 无法确认这份 App 来自哪个提交" >&2
+  echo "    先重跑 ./Scripts/build-app.sh(旧版脚本不写侧车文件)" >&2
+  APP_COMMIT="unknown"
+  APP_DIRTY=1
+fi
+
 # 1.5 清场:同名卷若还挂着,后面的 attach / convert 会互相打架
 #     (2026-09-14 实测:残留卷占着同名临时镜像 → convert 报「资源暂时不可用」)
 RESIDUAL="$(mount | grep -F "on /Volumes/$VOL_NAME " | awk '{print $1}' || true)"
@@ -163,6 +179,21 @@ if [ -n "$MOUNT_OUT" ]; then
     hdiutil detach "$MOUNT_OUT" > /dev/null || true
     exit 1
   fi
+  # 产物↔源码绑定:读**镜像里**那个 App 的 Info.plist,确认它就是 .app 侧车描述的提交。
+  # 特意从镜像里读而不是从 $APP_DIR 读 —— 将来打开这个 dmg 的人只能看到镜像里的东西,
+  # 「源目录里是对的」不能证明「打进去的是对的」。
+  GOT_COMMIT="$(/usr/libexec/PlistBuddy -c 'Print :UnrollSourceCommit' \
+                "$MOUNT_OUT/$APP_NAME.app/Contents/Info.plist" 2>/dev/null || echo '(缺)')"
+  if [ "$APP_COMMIT" = "unknown" ]; then
+    echo "  ! 镜像内 App 提交号 $GOT_COMMIT(无侧车可比,无法确认)" >&2
+  elif [ "$GOT_COMMIT" != "$APP_COMMIT" ]; then
+    echo "  ✗ 镜像内 App 的提交号与侧车不符:镜像=$GOT_COMMIT,侧车=$APP_COMMIT" >&2
+    echo "    dmg 里装的不是侧车描述的那份 App —— 重跑 build-app.sh && make-dmg.sh" >&2
+    hdiutil detach "$MOUNT_OUT" > /dev/null || true
+    exit 1
+  else
+    echo "  源码提交: ${GOT_COMMIT:0:7} ✓(与侧车一致)"
+  fi
   # 布局与观感只影响「打开 dmg 的第一眼」,但第一眼正是下载者唯一会给的注意力。
   # 两条都只警告不失败:产物本身是好的,只是观感打折,不该因此中断发布。
   if [ -f "$MOUNT_OUT/.DS_Store" ]; then
@@ -195,7 +226,23 @@ DMG_SIZE="$(du -h "$DIST_DIR/$DMG_NAME" | awk '{print $1}')"
 # 8. 校验和:无签名的发布,SHA256 是下载者唯一的完整性/防篡改凭据
 (cd "$DIST_DIR" && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256")
 
+# 9. dmg 侧车:发布前检只读这一份,它是「产物↔源码」链的最后一环。
+#    为什么侧车里要钉住 dmg 自己的 SHA256:这是唯一能识破
+#    「源码没变 / 侧车是旧的 / DMG 其实也被换过」的判据。任何一次重建都会产生
+#    新哈希,而旧侧车里写的是旧哈希 —— 两者对不上就说明侧车不是这份产物的。
+DMG_SHA="$(awk '{print $1}' "$DIST_DIR/$DMG_NAME.sha256")"
+{
+  echo "app=$APP_NAME"
+  echo "version=$VERSION"
+  echo "commit=$APP_COMMIT"
+  echo "dirty=$APP_DIRTY"
+  echo "dmg=$DMG_NAME"
+  echo "dmg_sha256=$DMG_SHA"
+  echo "built=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+} > "$DIST_DIR/$DMG_NAME.buildinfo"
+
 echo ""
 echo "✓ 生成 $DIST_DIR/$DMG_NAME ($DMG_SIZE)"
 echo "  → SHA256: $DIST_DIR/$DMG_NAME.sha256"
+echo "  → buildinfo: $DIST_DIR/$DMG_NAME.buildinfo(commit ${APP_COMMIT:0:7} / dirty=$APP_DIRTY)"
 echo "  → open $DIST_DIR/$DMG_NAME"

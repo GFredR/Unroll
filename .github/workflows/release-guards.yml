@@ -42,6 +42,12 @@ jobs:
       - name: Package DMG (mount + signature + checksum checks)
         run: ./Scripts/make-dmg.sh
 
+      # 守卫本身也要被守卫:注入四种坏产物(commit 不符 / dirty / 哈希不符 / 侧车缺失),
+      # 确认 publish.sh 的「产物↔源码绑定」判据真的会失败。三条判据在正常流程下
+      # 永远是绿的 —— 不注入坏样本,就分不清"真绿"和"根本没在检查"
+      - name: Verify the release guards themselves
+        run: ./Scripts/test-release-guards.sh
+
       - name: Upload DMG and checksum
         uses: actions/upload-artifact@v4
         with:
