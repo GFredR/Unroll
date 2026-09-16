@@ -120,6 +120,11 @@ fi
 # --------------------------------------------------------- 4. 工作区与 tag --
 step "[4/8] 工作区与 tag 对齐"
 
+# 只算**编进二进制**的路径(第 4、5 步共用)。刻意排除测试与 fixture:它们改十次
+# 也不影响产物,算进去只会制造噪音,而噪音会训练人忽略告警(守卫失效的常见死法)。
+SHIPPING_PATHS=(Unroll ArchiveKit UnrollQuickLook project.yml Scripts/gen_appicon.swift
+                ':(exclude)ArchiveKit/Tests')
+
 DIRTY="$(git status --porcelain)"
 if [ -z "$DIRTY" ]; then
     ok "工作区干净"
@@ -134,11 +139,6 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
     #   ① tag 必须在 HEAD 的历史上(否则 tag 指向一个不在 main 上的提交);
     #   ② tag 与 HEAD 之间不能有**源码**改动(源码 = 编进二进制的那些)。
     # 只改了 .github/ 或文档时,产物与 tag 的对应关系完全没变,放行。
-    # 只算**编进二进制**的路径。刻意排除测试与 fixture:它们改十次也不影响产物,
-    # 算进去只会制造噪音,而噪音会训练人忽略告警(守卫失效的常见死法)。
-    SHIPPING_PATHS=(Unroll ArchiveKit UnrollQuickLook project.yml Scripts/gen_appicon.swift
-                    ':(exclude)ArchiveKit/Tests')
-
     if ! git merge-base --is-ancestor "$TAG" HEAD 2>/dev/null; then
         fail "$TAG 不在 HEAD 的历史上 —— tag 指向了一个不在 main 上的提交"
     else
@@ -170,21 +170,26 @@ else
     fail "缺 $DMG —— 先跑:./Scripts/make-dmg.sh"
 fi
 
-# 产物必须由**当前的**打包脚本生成。改了打包脚本却不重建,是一类最隐蔽的
-# 沉默不一致:源码没变、tag 没变、sha256 也自洽 —— 唯独产物里少了这次的改进
-# (2026-09-16 实测撞上:.fseventsd 隐藏与布局告警改完,旧 dmg 里一个都没有)。
-SCRIPTS=(Scripts/build-app.sh Scripts/make-dmg.sh)
-if [ -n "$(git status --porcelain -- "${SCRIPTS[@]}")" ]; then
-    fail "打包脚本有未提交改动 —— 现有产物必然不是它生成的"
+# 产物必须由**当前的源码与打包脚本**生成。这里挡的是一类最隐蔽的沉默不一致:
+# 源码变了(或打包脚本变了)却没重建 —— tag 没变、sha256 自洽、Release 页面正常,
+# 唯独产物里少了这次的改动。
+#   2026-09-16 实测撞上两次:① 打包脚本改完(.fseventsd 隐藏 + 布局告警)旧 dmg 里
+#   一个都没有;② 加了「另存当前页 / 可拖进度条」却没重建 —— 后者的失效形式更糟:
+#   发出去的包没有新功能,而所有自动化检查都是绿的。
+BUILD_INPUTS=("${SHIPPING_PATHS[@]}" Scripts/build-app.sh Scripts/make-dmg.sh)
+
+if [ -n "$(git status --porcelain -- "${BUILD_INPUTS[@]}")" ]; then
+    fail "源码或打包脚本有未提交改动 —— 现有产物必然不代表当前代码"
 fi
+
 if [ -f "$DMG" ]; then
-    SCRIPT_TS="$(git log -1 --format=%ct -- "${SCRIPTS[@]}" 2>/dev/null || echo 0)"
+    INPUT_TS="$(git log -1 --format=%ct -- "${BUILD_INPUTS[@]}" 2>/dev/null || echo 0)"
     DMG_TS="$(stat -f %m "$DMG" 2>/dev/null || echo 0)"
-    if [ "${DMG_TS:-0}" -ge "${SCRIPT_TS:-0}" ]; then
-        ok "产物不早于打包脚本的最后一次提交"
+    if [ "${DMG_TS:-0}" -ge "${INPUT_TS:-0}" ]; then
+        ok "产物不早于源码 / 打包脚本的最后一次提交"
     else
-        fail "打包脚本在产物生成之后被改过 —— 产物不含这次的改进"
-        echo "      最后一次脚本改动:$(git log -1 --format='%h %s' -- "${SCRIPTS[@]}")" >&2
+        fail "源码或打包脚本在产物生成之后被改过 —— 产物不含这次的改动"
+        echo "      最后一次改动:$(git log -1 --format='%h %s(%cr)' -- "${BUILD_INPUTS[@]}")" >&2
         echo "      → 重跑:./Scripts/build-app.sh && ./Scripts/make-dmg.sh" >&2
     fi
 fi

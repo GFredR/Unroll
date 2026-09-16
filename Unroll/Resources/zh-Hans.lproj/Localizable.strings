@@ -117,3 +117,19 @@
 "crash.prompt.body" = "上次运行时没能正常关闭。可以把当时的操作记录整理成一份报告发给我吗?\n\n报告里只有版本、系统、归档格式、页数和操作步骤 —— 不含文件名、路径或任何内容,提交前你可以先看一遍。";
 "crash.prompt.report" = "查看报告…";
 "crash.prompt.dismiss" = "不再询问";
+
+/* ============ v2:阅读操作补完(2026-09-16) ============ */
+
+/* 窗口标题:文件名 · 页码(多窗口 / Dock 悬停辨认用) */
+"reader.window.title" = "%@ · P.%ld/%ld";
+
+/* 文件菜单:另存当前页(⌘S)/ 在访达中显示(⇧⌘F) */
+"app.menu.saveCurrentPage" = "另存当前页…";
+"app.menu.revealInFinder" = "在访达中显示";
+
+/* 写盘失败(刻意不带系统错误原文 —— 那串文字可能含完整路径) */
+"app.alert.saveFailed.title" = "保存失败";
+"app.alert.saveFailed.body" = "没能写入所选位置，换一个位置再试一次。";
+
+/* HUD 进度条的悬停提示(现在可以拖着跳页了) */
+"reader.hud.progress.hint" = "拖动跳页";

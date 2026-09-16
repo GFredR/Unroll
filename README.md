@@ -30,6 +30,9 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Bookmarks** — `⌘D` marks the current page, `⌥⌘↑` / `⌥⌘↓` jump between bookmarks (wrapping at the ends), and the Bookmarks menu jumps straight to any marked page.
 - **Four zoom modes** — fit window / fit width / fit height / actual size (`⌘3`–`⌘6`), with pinch and double-click zoom layered on top.
 - **Go to page** — `⌥⌘G` jumps to a page number.
+- **Save the current page as an image** (`⌘S`) — writes it out as PNG or JPEG. In two-page mode you get **the whole spread as you see it** (side by side, in your reading direction), not one isolated page.
+- **A draggable progress bar** — the HUD bar scrubs: the page number follows your drag, and it only jumps when you let go (instead of decoding a page for every step).
+- **Page number in the window title** — the title bar reads "file name · P.3/200", so multiple windows and Dock hover tell you where you are. `⇧⌘F` reveals the current file in Finder when you want to move on to the next volume.
 - **Encrypted archives are handled honestly** — detected up front, reported clearly, never a crash. See below.
 - **Native SwiftUI, macOS 14+, sandboxed, and with no network permission at all.**
 
@@ -133,6 +136,8 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⇧⌘↑` | Back to cover |
 | `⇧⌘↓` | Jump to last page |
 | `⌥⌘G` | Go to page… |
+| `⌘S` | Save the current page as an image (whole spread in two-page mode) |
+| `⇧⌘F` | Reveal the current file in Finder |
 | `⌘3` / `⌘4` / `⌘5` / `⌘6` | Fit window / fit width / fit height / actual size (1:1) |
 | `⌘D` | Add / remove a bookmark on the current page |
 | `⌥⌘↑` / `⌥⌘↓` | Previous / next bookmark (wraps at the ends) |

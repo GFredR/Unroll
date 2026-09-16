@@ -96,6 +96,9 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var pageCount = 0
     /// HUD 显示用:仅文件名,绝不存完整路径(隐私红线同 §5.10.4)
     @Published private(set) var documentName: String?
+    /// 当前文档 URL —— **只留在内存**,绝不持久化(续读/最近打开一律只落文件名,§5.7)。
+    /// 用途只有两个:另存当前页的默认文件名、以及「在访达中显示」
+    @Published private(set) var documentURL: URL?
     @Published var layout: PageLayout = .single {
         didSet {
             guard oldValue != layout, !isRestoringProgress else { return }
@@ -193,6 +196,8 @@ final class ReaderViewModel: ObservableObject {
         presentation = PagePresentation()
         secondary = nil
         documentName = url.lastPathComponent
+        // 失败也保留:打开失败时「在访达中显示」恰恰最有用(去看一眼这文件到底是什么)
+        documentURL = url
         let task = Task { await performOpen(url: url) }
         openTask = task
         return task
@@ -442,6 +447,30 @@ final class ReaderViewModel: ObservableObject {
         guard let key = documentKey else { return }
         bookmarkStore.clearDocument(key: key)
         bookmarkedPages = []
+    }
+
+    // MARK: - 导出 / 窗口标题(v2,2026-09-16)
+
+    /// 窗口标题:`文件名 · P.3/200`。多窗口与 Dock 悬停时能分辨「哪本、读到哪」
+    /// (窗口标题由 App 层写进 NSWindow,VM 只产出文本)
+    var windowTitle: String {
+        guard phase == .reading, let documentName else { return L10n.tr("app.name") }
+        return L10n.tr("reader.window.title", documentName, pageIndex + 1, pageCount)
+    }
+
+    /// 当前摊的上屏图用于导出(双页合成一张,并排顺序跟随阅读方向,见 `PageExport`)。
+    /// 非阅读态 / 上屏图还没就绪 → nil(调用方据此禁用菜单项,不留"点了没反应")
+    func exportImage() -> CGImage? {
+        guard phase == .reading, let primary = presentation.image else { return nil }
+        return PageExport.compose(primary: primary,
+                                  secondary: layout == .dual ? secondary : nil,
+                                  rightToLeft: direction == .rightToLeft)
+    }
+
+    /// 导出建议文件名(与当前显示一致;只含文件名,不含路径)
+    func exportFileName(format: PageExport.Format) -> String {
+        PageExport.suggestedFileName(documentName: documentName, page: pageIndex,
+                                     pageCount: pageCount, format: format)
     }
 
     // MARK: - 页码跳转(⌥⌘G)

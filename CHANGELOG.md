@@ -11,6 +11,10 @@
 - **续读记忆**:每本记住页码、单双页、左右开与缩放档位,重开自动回到原处(按「文件名 + 文件大小」认档,不存路径)
 - **书签**:⌘D 标记当前页,⌥⌘↑/↓ 在书签间跳转(到端点绕回),书签菜单可直达某一页
 - **跳转到页**:⌥⌘G 输入页码直达;窗口大小与位置自动记忆
+- **另存当前页**(⌘S):存成 PNG 或 JPEG;**双页模式下导出的是屏幕上那一整摊**(按当前阅读方向并排),不是单页。建议文件名带归档名与补零页号(`vol01-p003.png`),排出来就是阅读顺序
+- **进度条可拖动**(HUD):拖动中页码跟着变,松手才跳页 —— 不是每挪一格就解码一次
+- **窗口标题带页码**(`文件名 · P.3/200`)+ ⇧⌘F「在访达中显示」:多窗口与 Dock 悬停能分辨读到哪,接着看下一卷不用重新找文件
+- **静止后光标一并隐藏**:与 HUD 的 2.5 秒淡出同一拍,鼠标一动就回来
 - 最近打开(security-scoped bookmark,最多 10 条,只存文件名),菜单标注每本读到第几页
 - 最近打开里文件已被移走的条目会标「(找不到文件)」,**点开时说明原因再清理,不再无声消失**
 - **Finder 集成（QuickLook）**:按空格预览封面 + 总页数,文件图标直接显示封面,不必先打开 App。两个扩展(缩略图 + 预览)随 App 一起分发;加密/读不出来的归档刻意退回系统默认图标,不挂误导性占位图;只认 cbz/cbr/cb7/cbt,不碰裸 zip
@@ -25,6 +29,10 @@
 - **Resume**: remembers the page, single/two-page layout, reading direction and zoom mode per archive (identified by file name + size, no path stored)
 - **Bookmarks**: `⌘D` to mark the current page, `⌥⌘↑` / `⌥⌘↓` to jump between them (wrapping at the ends), with a menu to jump straight to a marked page
 - **Go to page** (`⌥⌘G`); window size and position are remembered too
+- **Save the current page** (`⌘S`) as PNG or JPEG. In two-page mode it writes **the whole spread you are looking at** (side by side, in your reading direction) rather than one isolated page. The suggested file name carries the archive name and a zero-padded page number (`vol01-p003.png`), so the exports sort in reading order
+- **Draggable progress bar** (HUD) — the page number follows your drag and it jumps when you let go, instead of decoding a page for every step
+- **Page number in the window title** (`file name · P.3/200`) plus `⇧⌘F` "Show in Finder" — multiple windows and Dock hover tell you where you are, and moving on to the next volume no longer means hunting for the file
+- **The cursor hides once you stop moving**, on the same beat as the HUD fading out; any mouse movement brings it back
 - Recents (security-scoped bookmarks, up to 10, filenames only) — the menu also shows how far you got in each one
 - Recents entries whose file is gone are marked "(missing)" and **explained when clicked before being cleaned up — no more silent disappearance**
 - **Quick Look integration**: press Space in Finder to preview the cover and page count, and let the file icon show the actual cover — no need to open the app. Two extensions (thumbnail + preview) ship inside the app; encrypted or unreadable archives deliberately fall back to the system icon instead of a misleading placeholder; only cbz/cbr/cb7/cbt are claimed, never plain zip

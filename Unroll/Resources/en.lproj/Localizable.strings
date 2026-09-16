@@ -117,3 +117,19 @@
 "crash.prompt.body" = "The previous session didn't shut down normally. Would you like to turn what was happening into a report for me?\n\nIt contains only the version, system, archive format, page count and the actions taken — no file names, paths or content. You can read it before submitting.";
 "crash.prompt.report" = "Review Report…";
 "crash.prompt.dismiss" = "Don't Ask Again";
+
+/* ============ v2: reading actions completed (2026-09-16) ============ */
+
+/* Window title: file name · page */
+"reader.window.title" = "%@ · P.%ld/%ld";
+
+/* File menu: save current page (⌘S) / show in Finder (⇧⌘F) */
+"app.menu.saveCurrentPage" = "Save Current Page…";
+"app.menu.revealInFinder" = "Show in Finder";
+
+/* Write failure (deliberately without the system error text — it may carry a full path) */
+"app.alert.saveFailed.title" = "Couldn't Save";
+"app.alert.saveFailed.body" = "The file couldn't be written there. Try another location.";
+
+/* Tooltip for the HUD progress bar (it can be dragged now) */
+"reader.hud.progress.hint" = "Drag to jump";

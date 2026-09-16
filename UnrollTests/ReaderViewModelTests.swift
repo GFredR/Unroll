@@ -476,4 +476,67 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertNil(ReaderViewModel.parsePageInput("1.5", pageCount: 200))
         XCTAssertNil(ReaderViewModel.parsePageInput("7", pageCount: 0), "空文档不跳转")
     }
+
+    // MARK: - 导出 / 窗口标题(v2,2026-09-16)
+
+    /// 双页模式的次页是异步加载的,断言前必须等它落定
+    private func waitForSecondary(_ vm: ReaderViewModel, timeout: TimeInterval = 2) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while vm.secondary == nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// 没有文档时标题回落到 App 名 —— 空窗口上挂个「P.1/0」很怪
+    func testWindowTitleFallsBackToAppNameWithoutDocument() {
+        let vm = makeViewModel()
+        XCTAssertEqual(vm.windowTitle, L10n.tr("app.name"))
+        XCTAssertFalse(vm.windowTitle.contains("P."))
+    }
+
+    /// 打开后标题带文件名与页码(多窗口 / Dock 悬停辨认用)
+    func testWindowTitleCarriesNameAndPage() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.goTo(min(2, vm.pageCount - 1))
+        XCTAssertEqual(vm.windowTitle,
+                       L10n.tr("reader.window.title", "plain.cbz", vm.pageIndex + 1, vm.pageCount))
+        XCTAssertTrue(vm.windowTitle.contains("plain.cbz"))
+    }
+
+    /// 未打开文档 → 导不出图(菜单项据此禁用,不留"点了没反应")
+    func testExportImageIsNilWithoutDocument() {
+        XCTAssertNil(makeViewModel().exportImage())
+    }
+
+    /// 单页模式导出 = 当前页本身
+    func testExportImageInSinglePageIsThePageItself() async throws {
+        let vm = try await openFixtureOrSkip()
+        let image = try XCTUnwrap(vm.exportImage())
+        XCTAssertGreaterThan(image.width, 0)
+        XCTAssertGreaterThan(image.height, 0)
+        XCTAssertNil(vm.secondary, "单页模式不该有次页")
+    }
+
+    /// 双页模式导出 = **屏幕上那一摊**(两页并成一张),宽度正好翻倍。
+    /// 口径与画布渲染同一套,否则「导出的和看到的不一样」
+    func testExportImageInDualPageComposesWholeSpread() async throws {
+        let vm = try await openFixtureOrSkip()
+        let single = try XCTUnwrap(vm.exportImage())
+
+        vm.layout = .dual
+        vm.goTo(0)
+        try await waitForSecondary(vm)
+
+        let spread = try XCTUnwrap(vm.exportImage())
+        XCTAssertEqual(spread.width, single.width * 2, "双页导出应把两页并排成一张")
+        XCTAssertEqual(spread.height, single.height)
+    }
+
+    /// 建议文件名带归档名与补零页号(扩展名随格式)
+    func testExportFileNameFollowsDocumentAndPage() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.goTo(0)
+        XCTAssertEqual(vm.exportFileName(format: .png), "plain-p001.png")
+        XCTAssertEqual(vm.exportFileName(format: .jpeg), "plain-p001.jpg")
+    }
 }

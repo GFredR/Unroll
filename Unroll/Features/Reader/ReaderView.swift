@@ -214,7 +214,7 @@ private struct ReaderCanvas: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                HUDView(viewModel: viewModel, visible: hudVisible)
+                HUDView(viewModel: viewModel, visible: hudVisible, onActivity: pokeHUD)
             }
             .contentShape(Rectangle())   // 点击区覆盖整个画布(含黑边)
             // 鼠标/触控板移动 → HUD 立现(onContinuousHover 只在移动时触发)
@@ -330,7 +330,10 @@ private struct ReaderCanvas: View {
 
     /// 页码指示已由 HUDView 替代(M3);保留此注释占位历史
 
-    /// 鼠标/触控板活动 → HUD 立现,静止 2.5s 后淡出(每次活动都重置计时)
+    /// 鼠标/触控板活动 → HUD 立现,静止 2.5s 后淡出(每次活动都重置计时)。
+    /// 淡出时**连光标一起藏掉**(2026-09-16):全屏沉浸阅读的惯例
+    /// (QuickTime / VLC 同款)。用的是 `setHiddenUntilMouseMoves`,
+    /// 鼠标一动光标立刻回来,不存在"找不着鼠标"的状态
     private func pokeHUD() {
         hudVisible = true
         hudHideTask?.cancel()
@@ -338,6 +341,7 @@ private struct ReaderCanvas: View {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
             hudVisible = false
+            NSCursor.setHiddenUntilMouseMoves(true)
         }
     }
 

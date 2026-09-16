@@ -6,7 +6,7 @@
 #   ./Scripts/verify-ui.sh                 # 拍三张截图到 docs/
 #   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
 #   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
-#   ONLY=crash ./Scripts/verify-ui.sh                 # 只跑某一段(none|empty|crash|dmg)
+#   ONLY=crash ./Scripts/verify-ui.sh                 # 只跑某一段(all|empty|reader|crash|dmg)
 #
 # 为什么要有这个脚本:
 #   交付前有三处只能靠"看"来判定的东西 —— 空态长什么样、崩溃询问弹窗的文案与
@@ -34,6 +34,9 @@ ONLY="${ONLY:-all}"
 
 SUPPORT_DIR="$HOME/Library/Containers/com.gfredr.unroll/Data/Library/Application Support/Unroll"
 SESSION="$SUPPORT_DIR/session.json"
+# 目录可能还不存在(App 从未在本机跑过,或容器被清理过)—— 不先建好,
+# 下面写 session 会报 "No such file or directory"(2026-09-16 实测踩到)
+mkdir -p "$SUPPORT_DIR"
 
 FAILED=0
 ok()   { echo "  ✓ $*"; }
@@ -105,6 +108,42 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "empty" ]; then
             ok "shot-empty-state.png"
         else
             bad "空态截图失败"
+        fi
+    fi
+fi
+
+# ------------------------------------------------------- 阅读窗口 / 标题 --
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "reader" ]; then
+    head2 "阅读窗口 · 标题带文件名与页码"
+    FIXTURE="$ROOT_DIR/ArchiveKit/Tests/Fixtures/plain.cbz"
+    if [ ! -f "$FIXTURE" ]; then
+        bad "找不到 fixture:$FIXTURE"
+    else
+        quit_app
+        reset_session
+        # 用系统「打开方式」把归档交给自己 —— 沙盒授权由系统一并给出,
+        # 这条路与用户双击文件完全同构
+        open -a "$APP" "$FIXTURE"
+        sleep 4
+        # 窗口标题能直接读到,所以这一项是**机器判据**,不需要人看图
+        TITLE="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" {print $3; exit}')"
+        if [ -z "$TITLE" ]; then
+            bad "拿不到窗口标题(读窗口名需要「屏幕录制」权限)"
+        else
+            case "$TITLE" in
+                *plain.cbz*) ok "标题含文件名:$TITLE" ;;
+                *) bad "标题不含文件名:«$TITLE»" ;;
+            esac
+            if printf '%s' "$TITLE" | grep -qE 'P\.[0-9]+/[0-9]+'; then
+                ok "标题含页码 —— Window 菜单 / Dock 悬停能分辨读到哪"
+            else
+                bad "标题不含页码:«$TITLE»"
+            fi
+        fi
+        ID="$(unroll_windows | head -1 | cut -f1)"
+        if [ -n "$ID" ]; then
+            screencapture -l"$ID" -x -o "$OUT_DIR/shot-reader-window.png" 2>/dev/null
+            [ -s "$OUT_DIR/shot-reader-window.png" ] && ok "shot-reader-window.png"
         fi
     fi
 fi
@@ -241,3 +280,6 @@ echo "脚本能保证的是「拍到的就是那一帧」;下面这些仍要你�
 echo "    · 崩溃询问的文案读起来会不会太硬"
 echo "    · 空态的三个元素(AppIcon / 说明 / 打开按钮)是否协调"
 echo "    · dmg 里两个图标的位置关系是否符合直觉(左 App 右 Applications)"
+echo "    · HUD 的进度条拖起来跟不跟手(拖动中页码跟着变,松手才跳页)"
+echo "    · 「文件 → 另存当前页…」存出来的图与屏幕上看到的一致(双页应是一整摊)"
+echo "    · 静止 2.5s 后光标是否一起隐藏、动一下就回来"

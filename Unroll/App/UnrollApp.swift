@@ -38,7 +38,8 @@ struct UnrollApp: App {
             ReaderView(viewModel: reader)
                 .frame(minWidth: 720, minHeight: 480)
                 // 窗口大小/位置记忆:AppKit setFrameAutosaveName 自动持久化并恢复
-                .background(MainWindowSaver())
+                // (2026-09-16 顺带接管窗口标题:带文件名与页码,见 WindowChrome)
+                .background(WindowChrome(title: reader.windowTitle))
                 // Finder 双击 / 系统打开方式:文件访问权由系统自动授予(沙盒下同理)
                 .onOpenURL { url in
                     openArchive(url: url)
@@ -73,6 +74,26 @@ struct UnrollApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+            }
+
+            // v2(2026-09-16):「另存当前页…」与「在访达中显示」。
+            // 用 .saveItem 而不是 .newItem —— 只读阅读器本来就没有「保存文稿」,
+            // 正好把系统的 Save 位夺过来;⌘S 与 macOS 惯例一致。
+            // ⇧⌘F 取「File / Finder」的联想键:⇧⌘R 已被「从右往左读」占用
+            CommandGroup(replacing: .saveItem) {
+                Button(L10n.tr("app.menu.saveCurrentPage")) {
+                    saveCurrentPage()
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(reader.phase != .reading)
+
+                Button(L10n.tr("app.menu.revealInFinder")) {
+                    if let url = reader.documentURL {
+                        NSWorkspace.shared.activateFileViewerSelecting([url])
+                    }
+                }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .disabled(reader.documentURL == nil)
             }
 
             CommandMenu(L10n.tr("app.menu.openRecent")) {
@@ -187,6 +208,16 @@ struct UnrollApp: App {
         }
     }
 
+    // MARK: - 另存当前页(v2,2026-09-16)
+
+    /// 双页模式下导出的是**屏幕上那一摊**(两张拼一张,顺序跟随阅读方向)——
+    /// 见 `PageExport` 的口径说明;单页模式就是当前页本身
+    private func saveCurrentPage() {
+        guard let image = reader.exportImage() else { return }
+        PageSavePanel.save(image: image,
+                           suggestedName: reader.exportFileName(format: .png))
+    }
+
     // MARK: - 打开链路(唯一入口:面板 / 拖拽 / 双击 / 最近打开 全走这里)
 
     private func openArchive(url: URL) {
@@ -241,20 +272,41 @@ struct UnrollApp: App {
     }
 }
 
-// MARK: - 窗口大小/位置记忆(v2,2026-09-15)
+// MARK: - 窗口外观:尺寸记忆 + 标题(v2,2026-09-15 / 2026-09-16)
 
 /// 借 AppKit 的 frameAutosaveName 实现零自管存储:
 /// NSWindow 自动把 frame 写进 UserDefaults(`NSWindow Frame …`),启动时自动恢复。
 /// 隐私上只有窗口几何数据,无任何文档信息。
-private struct MainWindowSaver: NSViewRepresentable {
+///
+/// 2026-09-16 顺带接管标题(`文件名 · P.3/200`):`WindowGroup("app.name")` 的标题是
+/// 静态的,而 Window 菜单 / Dock 悬停 / 多窗口辨认都需要**动态**页码。
+/// 标题由 VM 产出(`ReaderViewModel.windowTitle`),这里只负责写进 NSWindow ——
+/// 窗口标题同样是纯内存态,不落盘。
+private struct WindowChrome: NSViewRepresentable {
 
-    func makeNSView(context: Context) -> NSView { AutosaveView() }
-    func updateNSView(_ nsView: NSView, context: Context) {}
+    let title: String
 
-    private final class AutosaveView: NSView {
+    func makeNSView(context: Context) -> NSView { ChromeView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        (nsView as? ChromeView)?.apply(title: title)
+    }
+
+    private final class ChromeView: NSView {
+        /// 视图先于窗口就位(macOS 的 NSViewRepresentable 生命周期如此),
+        /// 故标题要缓存一份,等 `viewDidMoveToWindow` 再补写
+        private var pendingTitle = ""
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             window?.setFrameAutosaveName("UnrollMainWindow")
+            apply(title: pendingTitle)
+        }
+
+        func apply(title: String) {
+            pendingTitle = title
+            guard let window, window.title != title else { return }
+            window.title = title
         }
     }
 }
