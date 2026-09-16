@@ -153,8 +153,9 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null 2>&1; then
         if [ -n "$SRC_CHANGED" ]; then
             fail "$TAG 之后还有**源码**改动 —— 产物不再代表当前代码:"
             printf '      %s\n' $SRC_CHANGED >&2
-            echo "      → 要发布 tag 那版:确认产物是 tag 时构建的即可(见下条提示)" >&2
-            echo "      → 要发布当前代码:把 tag 移到 HEAD 并重跑 build-app.sh + make-dmg.sh" >&2
+            echo "      → 要发布 tag 那版:git checkout $TAG 后重跑 build-app.sh + make-dmg.sh" >&2
+            echo "      → 要发布当前代码:把 tag 重指到 HEAD(git tag -f),再重跑两者" >&2
+            echo "      (产物是否匹配由第 5 步的 buildinfo 判据兜底,不必靠时间猜)" >&2
         else
             OTHER_CHANGED="$(git diff --name-only "$TAG"..HEAD | wc -l | tr -d ' ')"
             ok "$TAG 在 HEAD 历史上,且两者之间无源码改动($OTHER_CHANGED 个非源码文件已忽略)"
