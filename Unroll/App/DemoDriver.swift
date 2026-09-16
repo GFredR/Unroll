@@ -30,7 +30,10 @@ enum DemoDriver {
     /// 支持三种是因为 `open --args` 在 macOS 15 上实测传不进 App(LaunchServices 会
     /// 过滤未知 argv),而 `open --env` 与标记文件都可靠 —— 标记文件最简单,故以它为主。
     static var isEnabled: Bool {
-        ProcessInfo.processInfo.arguments.contains("-demoScript")
+        // 测试宿主就是 App 本身:测试进程里绝不启动演示。否则标记文件一旦因录制
+        // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
+        guard !UnrollRuntime.isTesting else { return false }
+        return ProcessInfo.processInfo.arguments.contains("-demoScript")
             || ProcessInfo.processInfo.environment["UNROLL_DEMO_SCRIPT"] != nil
             || FileManager.default.fileExists(atPath: flagURL.path)
     }
