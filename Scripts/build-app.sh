@@ -155,8 +155,28 @@ else
   echo "  源码提交: ${COMMIT:0:7}"
 fi
 
-echo "  签名    : $(codesign -dv "$APP_DIR" 2>&1 | grep -m1 'Signature=' || echo '(无)')"
-echo "  沙盒    : $(codesign -d --entitlements :- "$APP_DIR" 2>/dev/null | grep -q 'app-sandbox' && echo '已启用' || echo '未启用')"
+# 下面两行刻意**不写成 `codesign … | grep …`**。原因是 set -o pipefail 下一个很隐蔽的
+# 竞态(2026-09-16 实测抓到一次,同一行打印出两个互相矛盾的值):
+#   `grep -m1` / `grep -q` 命中后立刻退出并关掉管道读端,而 codesign 可能还在写 →
+#   codesign 收到 SIGPIPE、以 141 退出 → pipefail 让**整条管道**判为失败 →
+#   后面的 `|| echo '…'` 兜底分支也执行。
+# 危害不是"少打一个值",而是**打了两个矛盾的结论**:签名行会同时显示
+# "Signature=adhoc" 和 "(无)";沙盒行会把已启用的沙盒报成「未启用」—— 后者是一句
+# 关于安全边界的陈述,报错方向正好是误报"没有保护"。所以这里改成先把输出整段收进
+# 变量、再用 shell 自己匹配,完全去掉会早退的管道。
+SIG_DUMP="$(codesign -dv "$APP_DIR" 2>&1 || true)"
+SIG_LINE=""
+while IFS= read -r _line; do
+  case "$_line" in Signature=*) SIG_LINE="$_line"; break ;; esac
+done <<< "$SIG_DUMP"
+echo "  签名    : ${SIG_LINE:-(无法读取)}"
+
+ENT_DUMP="$(codesign -d --entitlements :- "$APP_DIR" 2>/dev/null || true)"
+case "$ENT_DUMP" in
+  *app-sandbox*) echo "  沙盒    : 已启用" ;;
+  *)             echo "  沙盒    : ✗ 未启用(entitlements 里没有 app-sandbox)" ;;
+esac
+
 echo "  最低系统: $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$INFO")"
 
 # 文件关联是「双击即用」的命脉:漏了 UTI,装完也抢不到默认打开权
@@ -172,7 +192,11 @@ echo "  文件关联: 导出 UTI ${UTI_COUNT:-0} 个 / 文档类型 ${DOC_COUNT:
 
 MISSING_UTI=""
 for U in cbz cbr cb7 cbt; do
-  printf '%s\n' "$UTI_LIST" | grep -q "UTTypeIdentifier = com.gfredr.unroll.$U\$" || MISSING_UTI="$MISSING_UTI $U"
+  # 用 grep -c(读到 EOF)而不是 grep -q(命中即退):后者配上 pipefail 会在
+  # printf 收到 SIGPIPE 时把整条管道判失败,于是**每个** UTI 都报"缺失",
+  # 变成一次纯属虚构的构建失败(同上文 codesign 那处是同一类坑)
+  U_HITS="$(printf '%s\n' "$UTI_LIST" | grep -c "UTTypeIdentifier = com.gfredr.unroll.$U\$" || true)"
+  if [ "${U_HITS:-0}" -eq 0 ]; then MISSING_UTI="$MISSING_UTI $U"; fi
 done
 if [ -n "$MISSING_UTI" ]; then
   echo "  ✗ 缺导出 UTI 声明:$MISSING_UTI —— 装完无法双击打开对应格式" >&2

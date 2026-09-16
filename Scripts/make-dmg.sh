@@ -213,13 +213,20 @@ else
 fi
 
 # 7. 签名提示
-if ! codesign -dv "$APP_DIR" 2>&1 | grep -q 'Developer ID'; then
-  echo ""
-  echo "⚠️  当前是 ad-hoc 签名(无付费开发者账号),别人首次打开会被 Gatekeeper 拦。"
-  echo "    README 安装说明里给出这两条绕行方式即可:"
-  echo "      xattr -dr com.apple.quarantine /Applications/$APP_NAME.app"
-  echo "      或:右键点 $APP_NAME.app → 打开"
-fi
+# 同样避开 `codesign … | grep -q`:grep 命中即关管道,codesign 可能收到 SIGPIPE 退出
+# 141,而 set -o pipefail 会把整条管道判失败 —— 于是这条警告在用了 Developer ID 时
+# 也会照常弹出(见 build-app.sh 里同款坑的完整说明)。改成整段收进变量再匹配。
+SIGN_DUMP="$(codesign -dv "$APP_DIR" 2>&1 || true)"
+case "$SIGN_DUMP" in
+  *'Developer ID'*) : ;;
+  *)
+    echo ""
+    echo "⚠️  当前是 ad-hoc 签名(无付费开发者账号),别人首次打开会被 Gatekeeper 拦。"
+    echo "    README 安装说明里给出这两条绕行方式即可:"
+    echo "      xattr -dr com.apple.quarantine /Applications/$APP_NAME.app"
+    echo "      或:右键点 $APP_NAME.app → 打开"
+    ;;
+esac
 
 DMG_SIZE="$(du -h "$DIST_DIR/$DMG_NAME" | awk '{print $1}')"
 
