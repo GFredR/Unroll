@@ -1,18 +1,20 @@
 #!/bin/bash
 # ============================================================================
-# verify-ui.sh —— 界面验收自动取证(空态 / 崩溃询问 / dmg 布局)
+# verify-ui.sh —— 界面验收自动取证(空态 / 阅读窗口 / 密码界面 / 崩溃询问 / dmg 布局)
 # ----------------------------------------------------------------------------
 # 用法:
-#   ./Scripts/verify-ui.sh                 # 拍三张截图到 docs/
+#   ./Scripts/verify-ui.sh                 # 拍全套截图到 docs/
 #   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
 #   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
-#   ONLY=crash ./Scripts/verify-ui.sh                 # 只跑某一段(all|empty|reader|crash|dmg)
+#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg)
 #
 # 为什么要有这个脚本:
-#   交付前有三处只能靠"看"来判定的东西 —— 空态长什么样、崩溃询问弹窗的文案与
-#   按钮、dmg 打开后的图标排列。过去它们被记成"需要人眼确认",于是要么拖着不做,
-#   要么临发布才想起来。但其中**能被拍下来**的部分完全可以自动做掉:脚本负责
-#   "拍到正确的那一帧",人只负责"看一眼对不对"。
+#   交付前有几处只能靠"看"来判定的东西 —— 空态长什么样、加密归档的密码框长什么样、
+#   崩溃询问弹窗的文案与按钮、dmg 打开后的图标排列。过去它们被记成"需要人眼确认",
+#   于是要么拖着不做,要么临发布才想起来。但其中**能被拍下来**的部分完全可以自动做掉:
+#   脚本负责"拍到正确的那一帧",人只负责"看一眼对不对"。
+#   密码界面这一段还有一层作用:README 的头图就是它,一张一条命令就能重拍,
+#   文档里的图才不会悄悄停在上一版的界面上(2026-09-17 撞上过)。
 #
 # 拍不出来、必须人判断的:文案是否得体、图标间距是否好看。脚本不假装覆盖这些。
 #
@@ -146,6 +148,68 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "reader" ]; then
             [ -s "$OUT_DIR/shot-reader-window.png" ] && ok "shot-reader-window.png"
         fi
     fi
+fi
+
+# --------------------------------------------- 加密归档 · 密码输入界面 --
+# v1.0.1 新增能力。README 里那张头图就是它,所以必须能一条命令重拍 ——
+# 否则功能一改,文档里的图就悄悄变成上一版的界面(2026-09-17 实测撞上:
+# 图上还写着"当前版本暂不支持输入密码",而标题却在讲"给出密码入口")。
+if [ "$ONLY" = "all" ] || [ "$ONLY" = "password" ]; then
+    head2 "加密归档 · 密码输入(v1.0.1 新增)"
+
+    # ⚠️ 语言覆盖的关键前提:**App 必须尚未运行**。
+    # LaunchServices 只在新实例启动时把 argv 交给 App;已有实例在跑时 `--args`
+    # 会被静默丢掉 —— 这正是"open --args 传不进 App"这个印象的来源。
+    # 2026-09-17 复测:先 quit_app 再传,语言确实切过去了(LANG 用 --args 传,
+    # 归档仍走 `open -a` 交给同一个实例,沙盒授权随打开事件一并给出)。
+    #
+    # 窗口标题在这一阶段就是 App 显示名(开卷 / Unroll),所以"语言有没有真的
+    # 切过去"是**机器判据** —— 不做这一步的话,切换失败会把一张中文图悄悄
+    # 存进英文槽位,而脚本全绿。
+    shoot_password() {  # $1=语言  $2=输出文件名  $3=期望的窗口标题
+        local lang="$1" out="$2" want_title="$3"
+        local fixture="$ROOT_DIR/ArchiveKit/Tests/Fixtures/encrypted-zip.cbz"
+        if [ ! -f "$fixture" ]; then
+            bad "找不到 fixture:$fixture"
+            return
+        fi
+        quit_app
+        reset_session
+        sleep 1
+        open -a "$APP" --args -AppleLanguages "($lang)"
+        sleep 2
+        open -a "$APP" "$fixture"
+        sleep 3
+
+        local title
+        title="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" {print $3; exit}')"
+        if [ -z "$title" ]; then
+            bad "$lang:打开加密归档后找不到窗口"
+            return
+        fi
+        if [ "$title" != "$want_title" ]; then
+            bad "$lang:窗口标题是 «${title}»,期望 «${want_title}» —— 语言没切过去,拍出来的会是另一种语言的图"
+            return
+        fi
+        # ⚠️ 变量后面紧跟中文/书名号这类多字节字符时**必须写 ${var}**:
+        # UTF-8 locale 下 bash 会把多字节字符的首字节当成变量名的一部分
+        # (`$title»` → 变量名变成 `title»`),`set -u` 于是报 "unbound variable"。
+        # 2026-09-17 实测撞上,报错信息里那个变量名还带着一个乱码字节。
+        ok "$lang:标题 «${title}» —— 语言已生效"
+
+        local id
+        id="$(unroll_windows | head -1 | cut -f1)"
+        rm -f "$OUT_DIR/$out"
+        screencapture -l"$id" -x -o "$OUT_DIR/$out" 2>/dev/null
+        if [ -s "$OUT_DIR/$out" ]; then
+            ok "$out"
+        else
+            bad "$lang:截图失败"
+        fi
+    }
+
+    shoot_password zh-Hans shot-encrypted.png    开卷
+    shoot_password en      shot-encrypted-en.png Unroll
 fi
 
 # ------------------------------------------------------------- 崩溃询问 --
