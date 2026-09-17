@@ -25,7 +25,7 @@
 - **打开大归档不再假死**:列目录搬出主线程(网络卷 / 数千页的包不再让窗口转圈),并且**可以取消**(换书、关窗立刻生效,不留后台苦读)。对"库既报错也不给出条目"的坏包设了停滞上限,不再原地空转
 - 内存:缩略图池补上**像素预算**(原先只限张数)。页数再多,常驻内存也有界
 - 密码输入页改为居中大面板,输入框与说明不再挤成窄窄一条
-- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.9 MB(主程序 1.2 MB + 两个 Finder 扩展约 0.5 MB),DMG 756 KB
+- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.9 MB(主程序 1.3 MB + 两个 Finder 扩展约 0.5 MB),DMG 812 KB
 - **产物可自证来源**:App 内记有构建时的提交号,拿到 dmg 的人不必只信 SHA256 —— 打开包里的 `Info.plist` 就能核对这个二进制对应哪个公开提交。本项目没有付费签名,这是一条可以自查的信任锚
 
 **English**
@@ -49,7 +49,7 @@
 - **Large archives no longer freeze the app on open**: listing the archive now runs off the main thread (a network volume or a several-thousand-page archive no longer spins the window), and it **can be cancelled** — switching archives or closing the window takes effect immediately instead of leaving a background read grinding away. Archives where the library neither errors nor yields an entry hit a stagnation cap instead of spinning forever
 - Memory: the thumbnail pool now has a **pixel budget** (it used to be capped by count only), so resident memory stays bounded no matter how many pages there are
 - The password prompt is now a centred, larger panel — the field and its explanation are no longer squeezed into a narrow strip
-- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.9 MB (1.2 MB main binary plus ~0.5 MB for the two Finder extensions), DMG 756 KB
+- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.9 MB (1.3 MB main binary plus ~0.5 MB for the two Finder extensions), DMG 812 KB
 - **The build can prove its own origin**: the app records the commit it was built from, so a downloader does not have to take the SHA256 on faith — read `Info.plist` inside the bundle and check which public commit this binary corresponds to. With no paid signing certificate in play, that is a trust anchor you can verify yourself
 
 ## 1.0.0 — 2026-09-15（仅本机打标，从未发布 / tagged locally, never published）
