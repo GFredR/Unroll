@@ -149,3 +149,34 @@
 
 /* Tooltip for the HUD progress bar (it can be dragged now) */
 "reader.hud.progress.hint" = "Drag to jump";
+
+/* ============ v2: "Check Archive Integrity" (2026-09-17) ============ */
+
+/* File menu (⌥⌘V — "Verify") */
+"app.menu.checkIntegrity" = "Check Archive Integrity…";
+
+/* Result panel */
+"integrity.title" = "Check Archive Integrity";
+"integrity.hint" = "Reads every page's data (without decoding images). Large archives may take a while — you can stop at any time.";
+"integrity.running" = "Checking… %ld of %ld";
+"integrity.stop" = "Stop";
+"integrity.done" = "Done";
+
+/* Outcome: clean */
+"integrity.ok.title" = "No damage found";
+"integrity.ok.body" = "Checked all %ld pages — every one reads back fine.";
+
+/* Outcome: damaged pages */
+"integrity.damaged.title" = "%ld pages can't be read";
+"integrity.damaged.body" = "Pages that failed: %@";
+"integrity.damaged.summary" = "The other %ld pages are fine. These pages need a fresh copy of the archive.";
+"integrity.damaged.truncated" = " (showing the first %ld)";
+"integrity.pageSeparator" = ", ";
+"integrity.pageItem" = "page %@";
+
+/* Outcome: stopped before the end (cancelled / repeated failures) */
+"integrity.stopped.title" = "The check didn't finish";
+"integrity.stopped.body" = "It stopped at page %ld of %ld — the remaining pages were not checked.";
+
+/* Encrypted pages skipped (not damage) */
+"integrity.skipped" = "%ld pages were skipped because they are encrypted. Enter the archive password and run the check again to include them.";

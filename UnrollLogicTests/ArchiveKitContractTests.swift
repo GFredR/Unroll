@@ -6,12 +6,16 @@
 //      它能编译 + 跑通,就证明「本地 SPM 包 → 项目 target」的依赖链
 //      和 Unroll-Logic 快车道 scheme 都是通的 —— 这是骨架最重要的验收项。
 //   2. 形状锁定:M0 没有业务实现,但公开 API 的「形状」已经定死了
-//      (四态枚举、错误模型、条目模型)。把形状锁进测试,后面任何人
+//      (可读性枚举、错误模型、条目模型)。把形状锁进测试,后面任何人
 //      改坏签名(比如给 ArchiveProtection 加第五态)会立刻红灯。
+//      ⚠️ 2026-09-17:`ArchiveProtection` 由四态收敛为两态 —— 终局两态其实
+//      一直走 `ArchiveError`(见下面两条用例的说明)。锁形状要锁**真实的**形状,
+//      锁一个已经没人构造的形状等于给错误的安全感(那次教训写进了用例注释)。
 //   3. 反自我确认:测试断言的是「事实」而非「我希望的行为」——
 //      NaturalSort 在 M0 是字典序占位,测试就如实锁定占位行为并标注
 //      TODO(M1),绝不为了好看去断言还没实现的自然排序(LOOP-AGENTS N5)。
-// M1 起本目录扩展:detect(...) 的 5 个加密 fixture 行为测试(§6.2)。
+// M1 起本目录扩展:加密四态的 fixture 行为测试在 ArchiveKit 包内
+// (ArchiveKitTests),本 target 只负责「跨包契约形状」这一层。
 import XCTest
 import ArchiveKit
 
@@ -36,22 +40,33 @@ final class ArchiveKitContractTests: XCTestCase {
         XCTAssertNil(entry.size)
     }
 
-    // MARK: - ArchiveProtection(加密四态)
+    // MARK: - ArchiveProtection(可读性两态)
 
-    func testProtectionHasExactlyFourStates() {
-        // 四态是 §5.9.3 图 10 的骨架,对应四种完全不同的 UI 响应。
-        // 全部 case 能构造 + 能判等,锁死枚举形状。
-        let states: [ArchiveProtection] = [
-            .none,
-            .partial(encryptedCount: 3),
-            .full,
-            .headerEncrypted,
-        ]
-        XCTAssertEqual(Set(states).count, 4, "四态两两不等 —— 加重名态会静默吞掉一态")
+    /// 2026-09-17 收敛:原 `testProtectionHasExactlyFourStates` 断言「四态齐备」,
+    /// 但 `.full` / `.headerEncrypted` **从来没有构造点** —— 终局态在
+    /// `ArchiveDocument.open` 里以 throws 出去(它要求「要么完整可用、要么
+    /// 构造失败」,拿不到文档对象)。那条用例因此锁的是一个不存在的形状,
+    /// 还让人以为「四态都在这个枚举里判定」。
+    ///
+    /// 现在锁真实契约:枚举只承载可达的两态,且**「0 页加密」只能用 .none 表达**。
+    func testProtectionExpressesTwoReachableStates() {
+        let states: [ArchiveProtection] = [.none, .partial(encryptedCount: 3)]
+        XCTAssertEqual(Set(states).count, 2)
         XCTAssertEqual(states[0], .none)
         XCTAssertEqual(states[1], .partial(encryptedCount: 3))
         XCTAssertNotEqual(states[1], .partial(encryptedCount: 4),
                           "partial 的关联值必须参与相等判断")
+        XCTAssertNotEqual(ArchiveProtection.none, .partial(encryptedCount: 0),
+                          "「没有加密页」不许有第二种写法")
+    }
+
+    /// 四态在**系统层面**仍然齐备(§5.9.3):两态在枚举,终局两态在错误模型。
+    /// 契约落在两个类型上,而不是一个名不副实的枚举上 —— 这条同时守住
+    /// 「别把终局态又搬回枚举」(那会让 open 的 throws 语义被绕开)
+    func testFourStatesAreSplitAcrossEnumAndError() {
+        let readable: [ArchiveProtection] = [.none, .partial(encryptedCount: 2)]
+        let terminal: [ArchiveError] = [.encrypted, .headerEncrypted]
+        XCTAssertEqual(readable.count + terminal.count, 4, "§5.9.3 的四态一个都不能少")
     }
 
     // MARK: - ArchiveError(错误模型)

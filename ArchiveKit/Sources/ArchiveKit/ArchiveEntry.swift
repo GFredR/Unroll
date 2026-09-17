@@ -3,8 +3,14 @@
 // ----------------------------------------------------------------------------
 // 纯值类型 struct,不含逻辑(AGENTS.md 三.3)。列目录时从 C 层提取一次,
 // 之后 UI / 排序 / 缓存全部基于这个 Swift 模型,不再触碰 C API。
-// TODO(M1):从 archive_entry_pathname / _size / _is_encrypted 填充,
-//           并按扩展名(jpg/png/gif/webp/heic/tiff/avif)判定 isImage。
+//
+// ⚠️ 「这条是否加密」**刻意不在这里**(2026-09-17 澄清,旧注释曾写「从 _is_encrypted 填充」)。
+// 加密标志住在 `ArchiveDocument.entryEncrypted: [Bool]`(按展示序对齐 entries),
+// 原因是它只在两个地方被问:读页前置拦截、以及统计 encryptedImageCount —— 都是
+// ArchiveDocument 的内部逻辑,不需要每个条目对象背一个 Bool(几百页的量级无谓膨胀)。
+// 另一半原因更关键:`archive_entry_is_encrypted` 在**给了正确密码之后仍返回 1**
+// (实测,见 ArchiveDocument 文件头①),它是一个「归档里怎么存的」事实,不是
+// 「现在读不读得出」—— 混进入口模型最容易被误当后者。
 public struct ArchiveEntry: Sendable, Equatable {
 
     /// 条目在归档内的相对路径,如 "vol01/p002.jpg"

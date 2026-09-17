@@ -11,9 +11,14 @@ import XCTest
 
 final class PageCacheTests: XCTestCase {
 
-    /// 小预算(页数 2 / 像素 32 / 缩略图 3),测试图统一 4×4 = 16 像素
+    /// 小预算(页数 2 / 像素 32 / 缩略图 3),测试图统一 4×4 = 16 像素。
+    ///
+    /// 缩略图**像素**预算给得很宽(1000):这一组用例验证的是个数阈值与 LRU 顺序,
+    /// 不该被新加的像素阈值顺带影响 —— 两条阈值各有专属用例,混在一起就分不清
+    /// 是哪条在起作用(2026-09-17 补像素阈值时特意这么分开)
     private func makeBudget() -> PageCache.Budget {
-        PageCache.Budget(maxFullPages: 2, maxPixels: 32, maxThumbnails: 3)
+        PageCache.Budget(maxFullPages: 2, maxPixels: 32,
+                         maxThumbnails: 3, maxThumbnailPixels: 1000)
     }
 
     /// 合成纯色小图
@@ -104,7 +109,9 @@ final class PageCacheTests: XCTestCase {
 
     /// 单图 16px > maxPixels=8:插入后不许被自己淘汰(否则永远缓存未命中)
     func testSingleOversizedImageIsNeverDemoted() throws {
-        let cache = PageCache(budget: PageCache.Budget(maxFullPages: 2, maxPixels: 8, maxThumbnails: 3))
+        let cache = PageCache(budget: PageCache.Budget(maxFullPages: 2, maxPixels: 8,
+                                                       maxThumbnails: 3,
+                                                       maxThumbnailPixels: 1000))
         let image = try makeImage(width: 4, height: 4)   // 16px > 8px 预算
 
         cache.insert(page: 0, image: image)
@@ -130,6 +137,63 @@ final class PageCacheTests: XCTestCase {
         XCTAssertNotNil(cache.thumbnail(at: 5))
         // 最新插入的 page7 仍是全分辨率(未降级,自然无缩略图)
         XCTAssertNotNil(cache.fullImage(at: 7))
+    }
+
+    // MARK: - 缩略图像素预算(2026-09-17 补的缺口)
+
+    /// **个数没超、像素超了** —— 这正是原先漏掉的那条路径:
+    /// 24 张缩略图的个数上限看着很稳妥,但每张的像素随页面长宽比浮动,
+    /// 大页场景下个数还没到上限,内存早就上去了
+    func testThumbnailPixelBudgetEvictsEvenWhenCountIsUnderLimit() throws {
+        // 个数放宽到 10,像素只给 32(测试缩略图 16px/张 → 最多 2 张)
+        let cache = PageCache(budget: PageCache.Budget(maxFullPages: 1, maxPixels: 16,
+                                                       maxThumbnails: 10,
+                                                       maxThumbnailPixels: 32))
+        for page in 0..<8 {
+            cache.insert(page: page, image: try makeImage())
+        }
+
+        XCTAssertLessThanOrEqual(cache.thumbnailPixelTotal, 32,
+                                 "缩略图像素总额必须被预算卡住(个数远未到上限)")
+        XCTAssertLessThanOrEqual(cache.thumbnailCount, 2)
+        XCTAssertNil(cache.thumbnail(at: 0), "最旧的缩略图先被释放(LRU)")
+        XCTAssertNotNil(cache.thumbnail(at: 6), "最新的降级页仍有垫图")
+    }
+
+    /// 像素账目必须精确结清:降级时加上,释放时减掉,换书时归零 ——
+    /// 账目一漂,预算就成了摆设(而它不会报错,只会算错)
+    func testThumbnailPixelAccountStaysExact() throws {
+        let cache = PageCache(budget: PageCache.Budget(maxFullPages: 1, maxPixels: 16,
+                                                       maxThumbnails: 10,
+                                                       maxThumbnailPixels: 1000))
+        for page in 0..<3 {
+            cache.insert(page: page, image: try makeImage())   // 每张 4×4 = 16px
+        }
+        // 页数阈值 1 → page0/page1 各降一张 16px 缩略图
+        XCTAssertEqual(cache.thumbnailCount, 2)
+        XCTAssertEqual(cache.thumbnailPixelTotal, 32, "两张 16px 缩略图")
+
+        cache.removeAll()
+        XCTAssertEqual(cache.thumbnailPixelTotal, 0, "清空后像素账必须归零")
+        XCTAssertEqual(cache.fullResPixelTotal, 0)
+    }
+
+    /// **页数增长 ≠ 内存增长**:这是「压缩包里图片很多」时用户真正依赖的保证。
+    /// 200 页灌进小预算缓存,内存四项指标全部贴着预算,不随页数漂移
+    func testMemoryStaysBoundedAsPageCountGrows() throws {
+        let cache = PageCache(budget: makeBudget())   // 2 页 / 32px / 3 张 / 1000px
+
+        for page in 0..<200 {
+            cache.insert(page: page, image: try makeImage())
+        }
+
+        XCTAssertLessThanOrEqual(cache.fullResPageCount, 2)
+        XCTAssertLessThanOrEqual(cache.fullResPixelTotal, 32)
+        XCTAssertLessThanOrEqual(cache.thumbnailCount, 3)
+        XCTAssertLessThanOrEqual(cache.thumbnailPixelTotal, 1000)
+        // 条目表也不该无限留:缩略图被释放的页会整个移除(Evicted)
+        XCTAssertLessThanOrEqual(cache.entriesCount, cache.thumbnailCount + cache.fullResPageCount,
+                                 "每个留存条目都至少持有一张图,不该有纯占位的空条目")
     }
 
     // MARK: - 清空

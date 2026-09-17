@@ -27,5 +27,17 @@ final class AppSkeletonTests: XCTestCase {
         // M2 补充:Trimmed 缩略图上限与长边(见 DesignSystem 注释的取值理由)
         XCTAssertGreaterThan(DesignSystem.PageBudget.maxThumbnails, DesignSystem.PageBudget.maxCachedPages)
         XCTAssertEqual(DesignSystem.PageBudget.thumbnailLongEdge, 1600)
+        // 2026-09-17:缩略图**像素**预算。不锁具体数字,锁两条不变量 ——
+        // 数字会随手感调,不变量不该跟着动
+        let worstCaseThumbPixels = Int(DesignSystem.PageBudget.thumbnailLongEdge
+                                       * DesignSystem.PageBudget.thumbnailLongEdge)
+        // ① 至少装得下两张「最坏缩略图」(正方形 = 长边定义的上限)。
+        //    装不下就会「刚降级即被淘汰」,Trimmed 语义(翻回来不白屏)当场失效
+        XCTAssertGreaterThanOrEqual(DesignSystem.PageBudget.maxThumbnailPixels,
+                                    worstCaseThumbPixels * 2)
+        // ② 缩略图池必须**明显小于**全分辨率池:它只是垫图,
+        //    不该长成第二个大池子 —— 那正是 2026-09-17 修掉的那个缺口
+        XCTAssertLessThan(DesignSystem.PageBudget.maxThumbnailPixels,
+                          DesignSystem.PageBudget.maxPixels / 4)
     }
 }

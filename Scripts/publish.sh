@@ -291,8 +291,15 @@ if [ -f "$PATFILE" ]; then
         PATTERN="$PATTERN|$EXTRA"
         ok "已并入 $PATFILE 的自定义关键词"
     fi
+    # 这个文件里写着真实姓名 —— 它必须一直待在 .gitignore 里(2026-09-17)。
+    # 缺了这道断言,某次「顺手整理 .gitignore」就能让秘密随下一次 push 出去,
+    # 而**泄漏扫描本身查不出这一点**:扫描只看受控文件的内容,看不见
+    # 「一个不该受控的文件」。所以这条必须是 fail,不能是 warn。
+    if ! git check-ignore -q "$PATFILE"; then
+        fail "$PATFILE 未被 .gitignore 忽略 —— 它含真实身份关键词,入库即泄漏"
+    fi
 else
-    warn "未发现 $PATFILE(可选:放真实姓名等关键词,做更严的扫描)"
+    warn "未发现 $PATFILE —— 泄漏扫描处于弱档(只扫本机路径 / 私人邮箱域名)"
 fi
 
 LEAKS="$(git ls-files -z | xargs -0 grep -lIE "$PATTERN" 2>/dev/null || true)"

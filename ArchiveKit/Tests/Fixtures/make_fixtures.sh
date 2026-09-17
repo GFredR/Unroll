@@ -10,6 +10,8 @@
 #   empty.cbz              0 条目(→ .empty)
 #   no-images.cbz          只有 txt(→ .noImages)
 #   corrupted.cbz          纯文本伪装(→ .corrupted)
+#   damaged-page.cbz       目录完好、page2 负载被翻一字节(→ 完整性检查报 1 个坏页)
+#   many-entries.cbz       3 页 + 300 个零字节填充条目(→ 专测"列目录中途能被叫停",~32KB)
 #   plain.cbt              明文 tar(P0 格式补样本)
 #   encrypted-content.cb7  7z 内容加密(可列目录、不可解;-mhe=off)
 #   encrypted-header.cb7   7z 头部加密(列目录即 FATAL -30;-mhe=on)
@@ -144,7 +146,7 @@ print('📦 src/ 源图就绪(240×320 带标签纯色页)')
 PY
 
 # ---- 2. 清理旧产物(只删本轮确实会重建的;可选依赖缺失时保留对应样本) --------
-rm -f plain.cbz mac-junk.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt
+rm -f plain.cbz mac-junk.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt damaged-page.cbz many-entries.cbz
 if [ "$HAVE_PYZIPPER" = yes ]; then
   rm -f encrypted-zip.cbz encrypted-zip-aes.cbz
 fi
@@ -255,6 +257,70 @@ with tarfile.open('../plain.cbt', 'w', format=tarfile.USTAR_FORMAT) as t:
         with open(p, 'rb') as f:
             t.addfile(ti, f)
 print('📦 cbt 样本就绪(头字段无本机身份)')
+PY
+)
+
+# ---- 8b. 单页数据损坏(目录完好) ------------------------------------------
+# 2026-09-17 新增,补一个此前**没有任何 fixture 覆盖**的形态:
+#   corrupted.cbz 是「整个文件不是归档」——open 阶段就失败了;
+#   而真实用户遇到的更常见的是**包能打开、翻到某一页才炸**。
+#   完整性检查(ArchiveIntegrityChecker)要验的正是后者,没有样本就只能靠嘴说。
+#
+# 造法要点:
+#   · 用 **ZIP_STORED**(不压缩)+ 固定字节序写入 → 数据的位置与长度都可精确算出;
+#   · 只翻转 page2.png 负载中间的一个字节,**中央目录一个字节都不动** →
+#     归档依然能列出 3 个图片条目,只有 page2 的 CRC 对不上;
+#   · 不用 `zip` CLI 而用 python zipfile:前者会带上时间戳/extra 字段,
+#     偏移量随运行时间变化,翻的那一字节就落不到预期位置了。
+(
+  cd staging
+  python3 - <<'PY'
+import struct, zipfile
+
+with zipfile.ZipFile('../damaged-page.cbz', 'w', zipfile.ZIP_STORED) as z:
+    for p in ('page1.png', 'page2.png', 'page10.png'):
+        z.write(p, p)
+
+with zipfile.ZipFile('../damaged-page.cbz') as z:
+    offset = z.getinfo('page2.png').header_offset
+
+with open('../damaged-page.cbz', 'r+b') as f:
+    f.seek(offset)
+    local = f.read(30)                              # 本地文件头固定 30 字节
+    name_len, extra_len = struct.unpack('<HH', local[26:30])
+    data_at = offset + 30 + name_len + extra_len
+    f.seek(data_at + 5)                             # +5:跳过 PNG magic 与块头
+    byte = f.read(1)
+    f.seek(data_at + 5)
+    f.write(bytes([byte[0] ^ 0xFF]))
+
+print('📦 单页损坏样本就绪(目录完好、page2 负载被翻一个字节)')
+PY
+)
+
+# ---- 8c. 条目数跨过「取消检查点」的大包(2026-09-17 新增) --------------------
+# 只为一条性质而存在:**列目录的中途**能被叫停。
+#   ArchiveDocument.open 的取消检查每 256 个条目问一次 isCancelled()。
+#   其余 fixture 都只有个位数条目 → 检查只在第 0 轮命中过一次,
+#   「检查写在循环里、会重复触发」这条性质在它们身上**永远观察不到**:
+#   把检查挪到循环外面,那些用例照样全绿。本样本把条目数顶到 300,
+#   于是回调序列必然是 [0, 256] —— 用它锁住检查点的位置。
+#
+# 体积说明:这是唯一一个**刻意**超过 4 KB 的样本(实测 ~32 KB,每个条目约
+# 100 字节目录开销)。其它样本都是「真实归档应该长什么样」,这个不是 ——
+# 它是**探针**,凑够条目数即可,所以 300 个填充条目用零字节载荷。
+# 3 张真页照旧放进去,保证它同时仍是一个合法的漫画包。
+(
+  cd staging
+  python3 - <<'PY'
+import zipfile
+
+with zipfile.ZipFile('../many-entries.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
+    for p in ('page1.png', 'page2.png', 'page10.png'):
+        z.write('../src/' + p, p)
+    for i in range(300):
+        z.writestr('pad/%04d.txt' % i, '')
+print('📦 多条目探针就绪(3 页 + 300 个零字节填充条目)')
 PY
 )
 

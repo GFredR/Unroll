@@ -149,3 +149,34 @@
 
 /* HUD 进度条的悬停提示(现在可以拖着跳页了) */
 "reader.hud.progress.hint" = "拖动跳页";
+
+/* ============ v2:「检查归档完整性」(2026-09-17) ============ */
+
+/* 文件菜单(⌥⌘V 取 Verify 的联想键) */
+"app.menu.checkIntegrity" = "检查归档完整性…";
+
+/* 结果面板 */
+"integrity.title" = "检查归档完整性";
+"integrity.hint" = "逐页读取全部内容(不解码图片)。大归档可能要跑一会儿，随时可以停止。";
+"integrity.running" = "正在检查… %ld / %ld";
+"integrity.stop" = "停止";
+"integrity.done" = "完成";
+
+/* 结论:干净 */
+"integrity.ok.title" = "没有发现损坏";
+"integrity.ok.body" = "已检查全部 %ld 页，都能正常读取。";
+
+/* 结论:有坏页 */
+"integrity.damaged.title" = "发现 %ld 页读不出来";
+"integrity.damaged.body" = "读不出来的页：%@";
+"integrity.damaged.summary" = "其余 %ld 页可以正常阅读。这些页需要重新获取这个压缩包。";
+"integrity.damaged.truncated" = "（只列出前 %ld 个）";
+"integrity.pageSeparator" = "、";
+"integrity.pageItem" = "第 %@ 页";
+
+/* 结论:没跑完(被取消 / 反复失败) */
+"integrity.stopped.title" = "检查没有跑完";
+"integrity.stopped.body" = "只查到第 %ld / %ld 页就停了 —— 后面的页没有结论。";
+
+/* 加密页跳过提示(不是损坏) */
+"integrity.skipped" = "另有 %ld 页因为加密被跳过。输入解压密码后再检查，可以把它们一并算进来。";

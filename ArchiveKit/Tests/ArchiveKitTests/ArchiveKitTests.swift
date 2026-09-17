@@ -17,16 +17,28 @@ final class ArchiveKitTests: XCTestCase {
         XCTAssertEqual(a, b)
     }
 
-    /// 加密四态(§5.9.3):枚举形状即 API 契约,M0 锁死,防止后续误删/误并
-    func testProtectionFourStatesExist() {
-        let states: [ArchiveProtection] = [
-            .none,
-            .partial(encryptedCount: 3),
-            .full,
-            .headerEncrypted,
-        ]
-        XCTAssertEqual(states.count, 4, "四态设计(§5.9.3)不允许增减")
+    /// 可读性两态(2026-09-17 收敛,原 `testProtectionFourStatesExist`)。
+    ///
+    /// 为什么改:那条用例断言「§5.9.3 的四态不允许增减」,但它锁的是**一个已经
+    /// 不存在的形状** —— `.full` / `.headerEncrypted` 从来没有任何构造点(终局态
+    /// 走 throws:`open` 是「要么完整可用、要么构造失败」的静态工厂,拿不到文档
+    /// 对象)。一个为两个死 case 保持绿色的测试,比没有测试更坏:它让人以为
+    /// 「四态都在这儿判定」,而真去 `if case .full` 会找不到任何构造点。
+    /// 现在锁**真实契约**:本枚举只承载可达的两态。
+    func testProtectionExpressesTheTwoReachableStates() {
+        let states: [ArchiveProtection] = [.none, .partial(encryptedCount: 3)]
+        XCTAssertEqual(states.count, 2, "可读性只有两态;终局态改由 ArchiveError 表达")
         XCTAssertEqual(ArchiveProtection.partial(encryptedCount: 3), .partial(encryptedCount: 3))
+        // 「0 页加密」只能用 .none 表达 —— 不许出现 .partial(0) 这种第二写法
+        XCTAssertNotEqual(ArchiveProtection.none, .partial(encryptedCount: 0))
+    }
+
+    /// 四态在**系统层面**仍然齐备:两态在枚举里,终局两态在错误里(§5.9.3)。
+    /// 契约落在两个类型上,而不是一个名不副实的枚举上
+    func testFourStatesExistAcrossEnumAndError() {
+        let readable: [ArchiveProtection] = [.none, .partial(encryptedCount: 2)]
+        let terminal: [ArchiveError] = [.encrypted, .headerEncrypted]
+        XCTAssertEqual(readable.count + terminal.count, 4, "§5.9.3 的四态一个都不能少")
     }
 
     /// 错误模型:覆盖设计文档 §4.1 列出的全部失败形态(损坏/加密/空/无图/未知)

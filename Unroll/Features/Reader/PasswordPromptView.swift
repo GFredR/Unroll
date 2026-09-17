@@ -17,6 +17,11 @@
 //      对着键盘一位一位数是最容易让人放弃的体验。
 //   ④ 提交前**不 trim**:密码首尾的空格可能是有意义的字符。替用户"顺手修正"
 //      输入是密码框最经典的 bug(改了之后用户永远也输不对)。
+//   ⑤ **版式是「居中大面板」,不是通栏**(2026-09-17 用户拍板):全屏容器
+//      (`.frame(maxWidth: .infinity)`)会把子视图拉满窗口,不设上限则输入框
+//      横贯整窗、又扁又宽。故 maxWidth 760(占窗口大部分但不铺满) +
+//      minWidth 440(托住 sheet 容器:它的尺寸由内容决定,没下限会挤成窄缝)。
+//      纵向另加一段 padding —— 内容只有三四行,不垫高会显得扁平
 import SwiftUI
 
 struct PasswordPromptView: View {
@@ -42,7 +47,7 @@ struct PasswordPromptView: View {
     @FocusState private var isFieldFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.lg) {
             heading
             HStack(spacing: DesignSystem.Spacing.sm) {
                 field
@@ -54,7 +59,13 @@ struct PasswordPromptView: View {
             actions
         }
         .padding(DesignSystem.Spacing.lg)
-        .frame(minWidth: 340)
+        // 纵向留白:内容本身只有三四行,不加高会显得又扁又宽(2026-09-17)
+        .padding(.vertical, DesignSystem.Spacing.lg)
+        // 一横一竖两个约束合起来才是「居中大面板」:
+        //   maxWidth 760 —— 占窗口大部分但**不铺满**(全屏容器会把子视图拉满,
+        //     不设上限输入框就横贯整窗,这是 2026-09-17 的原始版式问题);
+        //   minWidth 440 —— sheet 容器尺寸由内容决定,没有下限会挤成一条窄缝
+        .frame(minWidth: 440, maxWidth: 760)
         .onAppear { isFieldFocused = true }
     }
 

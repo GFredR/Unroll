@@ -3,8 +3,16 @@
 // ----------------------------------------------------------------------------
 // 原则:所有失败走 throws / Result,UI 层据此切错误态页面(AGENTS.md 八)。
 // 每个错误对应用户可读的双语文案(§5.9.3.1 的 8 组 key),绝不含英文技术原文。
-// TODO(M1):定稿各 case 的关联值(如 C 状态码、错误串仅留日志用途),
-//           并保证与 Localizable 的 key 一一对应。
+//
+// 关联值已定稿(2026-09-17 撤掉旧 TODO,它写于 M1 设计期,早已完成):
+//   · `.unknown(code:message:)` —— code 是 libarchive 状态码;message **仅进日志**,
+//     绝不进 UI(也绝不进面包屑:可能含完整路径,§5.9.4 约束 6);
+//   · `.noImages(found:)` —— 条目总数,填进「已读取 N 个条目」那句文案;
+//   · `.wrongPassphrase` 与 `.encrypted` 刻意分开 —— 「密码不对,再试一次」和
+//     「这个文件需要密码」是两件事,合并会让用户不知该做什么(见下面 case 注释)。
+// UI 映射(错误 → 文案 key)在 `ReaderViewModel.openFailure` / `pageFailure` /
+// `passwordFailure` 三处;本文件的注释只负责说清「语义边界」,不重复那三张表 ——
+// 两边都写会漂移,而漂移出的文案错误用户第一个看到。
 // Equatable:单测断言「抛出的错误 == 预期 case」;关联值全是基础类型可自动合成
 public enum ArchiveError: Error, Sendable, Equatable {
     /// 文件损坏 / 不是支持的归档格式

@@ -81,6 +81,18 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
     }
 
+    /// 完整性检查(⌥⌘V,2026-09-17)。取「Verify」的联想键;
+    /// ⌘/⇧⌘/⌥⌘ 的常用位已占满(见上面几条注释),⌥⌘V 是剩下的合适位置。
+    /// 它只在阅读态可用(disabled),但 keyEquivalent 与 disabled 无关 ——
+    /// 断言的正是「这一项被正确注册进了菜单」
+    func testFileMenuCarriesCheckIntegrityWithOptionCommandV() throws {
+        _ = try requireMenu()
+        let title = L10n.tr("app.menu.checkIntegrity")
+        let item = try XCTUnwrap(menuItem(titled: title), "菜单里找不到「\(title)」")
+        XCTAssertEqual(item.keyEquivalent, "v")
+        XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .option])
+    }
+
     // MARK: - 既有命令不许在重构里掉队
 
     /// M3 验收标准「纯键盘可完成全部操作」的可执行版本:逐个点名常用命令
@@ -95,6 +107,7 @@ final class MenuStructureTests: XCTestCase {
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.addBookmark", "app.menu.previousBookmark", "app.menu.nextBookmark",
             "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
+            "app.menu.checkIntegrity",
         ]
         for key in expected {
             let title = L10n.tr(key)
@@ -113,6 +126,7 @@ final class MenuStructureTests: XCTestCase {
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.nextBookmark", "app.menu.previousBookmark",
             "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
+            "app.menu.checkIntegrity",
         ]
         for key in keys {
             let title = L10n.tr(key)

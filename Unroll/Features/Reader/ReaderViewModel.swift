@@ -148,7 +148,22 @@ final class ReaderViewModel: ObservableObject {
     // MARK: - 私有
 
     private var store: PageStore?
+    /// 当前文档。PageStore 里也有一份(它自己持有),这里是 VM 侧的引用 ——
+    /// 给**完整性检查**用:它要顺序读全档,但不需要缓存与解码,走 PageStore
+    /// 会把每一页都解码并塞进 LRU(「检查」变成「预热」,内存白吃一轮)
+    private var document: ArchiveDocument?
     private var openTask: Task<Void, Never>?
+    private var integrityTask: Task<Void, Never>?
+    /// 「这一轮检查」的代号(2026-09-17)。每启动一次检查 +1,换书 / 换文档 /
+    /// 关面板也 +1 —— 于是**过期的回调认不出自己已经作废**。
+    ///
+    /// 为什么必须有它(不是防御性代码,是实测缺陷):Task 的取消是**协作式**的,
+    /// `cancel()` 只置一个标志,后台那个同步 C 循环要跑到下一次检查点才发现。
+    /// 在它发现之前,用户可能已经打开另一本书了;那一刻整段 MainActor.run 收尾
+    /// 照常执行,把**旧包的结论**写进**新包的界面**。
+    /// 结论本身没错,错的是归属 —— 而用户会据此判断刚打开的这个包有没有坏。
+    /// 取消标志管的是「别白干活」,代号管的是「别写错地方」,两件事
+    private var integrityGeneration = 0
     /// 部分加密包的加密页数(单页失败卡片的「其余 %d 页可读」用)
     private var encryptedPageCount = 0
 
@@ -185,6 +200,104 @@ final class ReaderViewModel: ObservableObject {
     /// 页码跳转面板显隐(菜单命令置位,View 渲染 sheet —— 命令不持有 View 状态)
     @Published var isJumpSheetPresented = false
 
+    // MARK: - 完整性检查(2026-09-17)
+
+    /// 检查状态。nil = 既没在检查也没有结果
+    @Published private(set) var integrity: IntegrityState?
+
+    /// 结果面板的显隐。与 `integrity` 分开:面板的显隐是**视图状态**,
+    /// 而检查状态还要被测试直接断言 —— 混在一个字段里,测试就得为了
+    /// 关面板而去动业务状态
+    @Published var isIntegritySheetPresented = false
+
+    enum IntegrityState: Equatable {
+        /// 进行中(带进度:已检查 / 总页数)
+        case running(checked: Int, total: Int)
+        /// 结束(结果见 ArchiveIntegrityReport)。**取消也算结束** ——
+        /// 报告里带着 stoppedEarly,界面上说「查到第 N 页就停了」比
+        /// 「没有结果」有用得多
+        case finished(ArchiveIntegrityReport)
+    }
+
+    /// 菜单可用性:只有正在阅读一份真实文档时才谈得上检查它
+    var canCheckIntegrity: Bool {
+        phase == .reading && document != nil && pageCount > 0
+    }
+
+    /// 开始检查(菜单命令入口)。重复触发 = 重新开始。
+    ///
+    /// 返回本次检查任务(与 `open(url:)` 同一套路):UI 忽略返回值,
+    /// 测试可以 await 等状态机落定 —— 否则「等检查跑完」只能靠 sleep 猜时间,
+    /// 而猜出来的时间既慢又不稳
+    @discardableResult
+    func checkIntegrity() -> Task<Void, Never>? {
+        guard canCheckIntegrity, let document else { return nil }
+        integrityTask?.cancel()
+
+        let total = document.entries.count
+        integrityGeneration += 1
+        let generation = integrityGeneration
+        integrity = .running(checked: 0, total: total)
+        isIntegritySheetPresented = true
+        Breadcrumbs.shared.record(.integrityCheckStarted(pages: total))
+
+        // ⚠️ 闭包结构是刻意的(2026-09-17,写错过一次):
+        // 外层 `Task.detached` 先 `[weak self]` + 一次 `guard let vm = self`,
+        // 之后内外两层回调都只用这个**局部强引用 vm**。不要在里层再写
+        // `[weak self]` —— 那会去捕获外层那个已经被弱化的 self,
+        // 编译期直接报 "reference to captured var 'self' in concurrently-executing code"。
+        // 代价是这次检查期间 VM 被强持有,而 VM 本就是 App 生命周期的对象,无妨
+        let task = Task.detached(priority: .utility) { [weak self] in
+            guard let vm = self else { return }
+
+            let report = ArchiveIntegrityChecker.check(
+                document: document,
+                // Task.isCancelled 在这里读到的是**本 detached 任务**的取消状态
+                // (闭包是在它的线程上被同步调用的)—— 于是 VM 的 cancel 能穿到
+                // 检查循环里去
+                isCancelled: { Task.isCancelled },
+                onProgress: { done in
+                    Task { @MainActor in
+                        // 代号不符 = 这一轮已经作废(换书了 / 又点了一次检查),
+                        // 迟到进度不许写进当前状态
+                        guard vm.integrityGeneration == generation,
+                              case .running = vm.integrity else { return }
+                        vm.integrity = .running(checked: done, total: total)
+                    }
+                })
+
+            await MainActor.run {
+                // 代号守卫:取消是协作式的,cancel() 之后后台循环可能还要跑一会儿。
+                // 若这期间用户换了书,这一轮的结论已经**不属于**当前文档了
+                guard vm.integrityGeneration == generation else { return }
+                vm.integrity = .finished(report)
+                vm.integrityTask = nil
+                Breadcrumbs.shared.record(.integrityCheckFinished(
+                    damaged: report.damagedCount, stoppedEarly: report.stoppedEarly))
+            }
+        }
+        integrityTask = task
+        return task
+    }
+
+    /// 中断检查(面板上的「停止」)。**保留已查到的结论** ——
+    /// 报告会带 stoppedEarly,不是「白干了」
+    func cancelIntegrityCheck() {
+        integrityTask?.cancel()
+    }
+
+    /// 关掉结果面板。**同时清掉结论** —— 于是「点菜单」的语义永远是
+    /// 「现在跑一遍」,不会出现「这次点开看到的是上次的结论」这种要命的歧义
+    /// (检查结果关乎「要不要换源文件」,不能让人怀疑它是不是旧的)。
+    /// 面板开着时点「完成」/按 Esc 也走这里,所以要顺手把还在跑的任务停掉
+    func dismissIntegrity() {
+        integrityTask?.cancel()
+        integrityTask = nil
+        integrityGeneration += 1
+        isIntegritySheetPresented = false
+        integrity = nil
+    }
+
     /// 存储可注入(单测用隔离 suite)
     init(progressStore: ReadingProgress = ReadingProgress(),
          bookmarkStore: Bookmarks = Bookmarks()) {
@@ -211,8 +324,18 @@ final class ReaderViewModel: ObservableObject {
     @discardableResult
     func open(url: URL, passphrase: String? = nil) -> Task<Void, Never> {
         openTask?.cancel()
+        // 换书/重开:进行中的完整性检查针对的是**旧文档**,必须停掉 ——
+        // 光 cancel 不够(协作式取消要等下一个检查点),代号 +1 才能让
+        // 已经跑完、正排队等待回主线程的那次收尾**认出自己已作废**
+        integrityTask?.cancel()
+        integrityTask = nil
+        integrityGeneration += 1
+        integrity = nil
+        // 面板也要关:旧包的结论留在屏幕上,用户会以为说的是刚打开这本
+        isIntegritySheetPresented = false
         let oldStore = store
         store = nil
+        document = nil
         if let oldStore {
             Task { await oldStore.teardown() }
         }
@@ -241,11 +364,18 @@ final class ReaderViewModel: ObservableObject {
             // 带密码打开时 ArchiveKit 已就地验证过密码(读得动才算对,见
             // ArchiveDocument.verifyPassphrase),所以走到这里就说明密码可用 ——
             // VM 不必也不该自己再验一次(那会多读一遍加密数据)
-            let document = try ArchiveDocument.open(url: url, passphrase: passphrase)
+            //
+            // ⚠️ **必须走 openOffMain**(2026-09-17 修):本方法是 @MainActor 隔离的,
+            // 直接调 `ArchiveDocument.open` 会让列目录那段同步 I/O **在主线程跑完**。
+            // 一个几万条目的大包或在网络卷上,就是几秒的整窗冻结 ——「打开大压缩包
+            // 时转菊花假死」的根因。跨 actor 的 `await` 会把结果送回主线程,
+            // 而重活留在后台
+            let document = try await Self.openOffMain(url: url, passphrase: passphrase)
             try Task.checkCancellation()
 
             let store = PageStore(document: document)
             self.store = store
+            self.document = document
             pageCount = document.entries.count
             if case .partial(let count) = document.protection {
                 encryptedPageCount = count
@@ -326,6 +456,33 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 
+    // MARK: - 在后台打开(2026-09-17)
+
+    /// 把 `ArchiveDocument.open` 挪出主线程,并把**父任务的取消**转达给它。
+    ///
+    /// 两个都必须自己动手,不能指望语言默认行为:
+    ///   · **线程**:`Task { }` 在 @MainActor 类型里会继承 MainActor 隔离,
+    ///     所以「在 Task 里调 open」= 还是在主线程调 open。真正换线程要靠
+    ///     `Task.detached`(它的闭包不继承 actor 上下文);
+    ///   · **取消**:`Task.detached` 是**独立顶层任务**,父任务被 cancel 时
+    ///     它不会收到任何通知。列目录循环是同步 C 代码,唯一的叫停方式就是
+    ///     它自己轮询一个标志位 —— 故用 `withTaskCancellationHandler` 接住
+    ///     父任务的取消,翻成标志位喂给 ArchiveKit 的 `isCancelled`。
+    ///
+    /// 少掉第二点会怎样:用户误开了一个 2GB 的包,马上改开另一个 —— 前一个
+    /// 仍在后台一路啃到列完目录(几秒的 CPU + 随机读),白烧。
+    private nonisolated static func openOffMain(url: URL,
+                                                passphrase: String?) async throws -> ArchiveDocument {
+        let flag = CancellationFlag()
+        return try await withTaskCancellationHandler {
+            try await Task.detached(priority: .userInitiated) {
+                try ArchiveDocument.open(url: url, passphrase: passphrase) { flag.isCancelled }
+            }.value
+        } onCancel: {
+            flag.cancel()
+        }
+    }
+
     // MARK: - 解压密码的输入与取消(v2,2026-09-17)
 
     /// 打开阶段的密码提交(全屏密码视图)。
@@ -379,15 +536,26 @@ final class ReaderViewModel: ObservableObject {
     private func unlockWithPassword(_ password: String) async {
         guard let url = documentURL else { return }
         do {
-            let document = try ArchiveDocument.open(url: url, passphrase: password)
+            // 同样必须走后台:带密码的 open 除了列目录还要**试读最多 8MB 加密数据**
+            // 来验证密码(见 ArchiveDocument.verifyPassphrase),在主线程做就是
+            // 实打实的可见卡顿
+            let document = try await Self.openOffMain(url: url, passphrase: password)
 
             // 走到这里说明密码已确认可用(ArchiveKit 在 open 里就地验证过),
             // 下面这段是本次操作**唯一**会改动现状的地方
             let newStore = PageStore(document: document)
             let oldStore = store
             store = newStore
+            self.document = document
             pageCount = document.entries.count
             encryptedPageCount = 0
+            // 解锁换了文档:旧的完整性检查结果针对旧文档(加密页多、结论偏灰),
+            // 留着会让用户以为「这个包有问题」——其实只是当时没密码
+            integrityTask?.cancel()
+            integrityTask = nil
+            integrityGeneration += 1
+            integrity = nil
+            isIntegritySheetPresented = false
             Breadcrumbs.shared.record(.passphraseAttempt(success: true))
             await oldStore?.teardown()
 
@@ -399,6 +567,9 @@ final class ReaderViewModel: ObservableObject {
             passwordFailure = nil
             await loadPage(pageIndex)
             await newStore.anchorDidChange(to: pageIndex)
+        } catch is CancellationError {
+            // 被取消(换书 / 关窗):不改任何状态,更不能报「密码不对」——
+            // 用户什么都没输错,只是中途换了文件
         } catch let error as ArchiveError {
             Breadcrumbs.shared.record(.passphraseAttempt(success: false))
             passwordFailure = Self.passwordFailure(for: error)
@@ -696,3 +867,31 @@ final class ReaderViewModel: ObservableObject {
         }
     }
 }
+
+// MARK: - 取消标志(2026-09-17,配合 openOffMain)
+
+/// 只做一件事:把一个「父任务已被取消」的布尔,安全地从 `onCancel` 递给
+/// 后台线程上那个**同步**列目录循环。
+///
+/// 为什么不用 actor:读它的一方是 libarchive 的 C 循环,同步执行、不能 await ——
+/// 而 actor 的访问点全是 async。这正是「必须同步共享」的场合,锁是唯一解。
+/// `@unchecked Sendable` 是诚实声明:线程安全靠下面那把 NSLock,**不是**靠
+/// 编译器能证明的隔离(别把这两个混为一谈)
+private final class CancellationFlag: @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var cancelled = false
+
+    var isCancelled: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        lock.unlock()
+    }
+}
+

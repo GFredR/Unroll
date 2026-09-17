@@ -103,6 +103,18 @@ struct UnrollApp: App {
                 }
                 .keyboardShortcut("k", modifiers: [.command, .shift])
                 .disabled(!reader.hasLockedPages)
+
+                Divider()
+
+                // 完整性检查(⌥⌘V,2026-09-17):主动把每一页的字节读一遍验 CRC,
+                // 在用户翻到坏页**之前**就给出「有几页读不出来」的结论 ——
+                // 逐页报错的时机太晚,用户那时已经不知道该不该换源文件了。
+                // ⇧⌘F / ⇧⌘K 已占用,⌥⌘V 取「Verify」的联想键
+                Button(L10n.tr("app.menu.checkIntegrity")) {
+                    reader.checkIntegrity()
+                }
+                .keyboardShortcut("v", modifiers: [.command, .option])
+                .disabled(!reader.canCheckIntegrity)
             }
 
             CommandMenu(L10n.tr("app.menu.openRecent")) {

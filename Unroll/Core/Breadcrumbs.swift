@@ -60,6 +60,11 @@ enum BreadcrumbEvent: Equatable, Sendable {
     /// 而真实密码含大小写数字之外的字符(中文密码、符号)必然被 sanitize 丢掉 ——
     /// 但这不构成安全保证,真正的保证是**调用方压根不传**(§5.10.4 的结构性红线)
     case passphraseAttempt(success: Bool)
+    /// 完整性检查开始(2026-09-17)。只记总页数 —— 检查是「用户主动触发的重活」,
+    /// 若崩在它里面,这条是唯一能说明「当时在干什么」的线索
+    case integrityCheckStarted(pages: Int)
+    /// 完整性检查结束:坏页数 + 是否过早收工(full / early)
+    case integrityCheckFinished(damaged: Int, stoppedEarly: Bool)
 
     var name: String {
         switch self {
@@ -81,6 +86,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .coverAloneChanged: return "coverAloneChanged"
         case .passphraseRequired: return "passphraseRequired"
         case .passphraseAttempt: return "passphraseAttempt"
+        case .integrityCheckStarted: return "integrityCheckStarted"
+        case .integrityCheckFinished: return "integrityCheckFinished"
         }
     }
 
@@ -122,6 +129,10 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return nil
         case .passphraseAttempt(let success):
             return success ? "ok" : "fail"
+        case .integrityCheckStarted(let pages):
+            return String(pages)
+        case .integrityCheckFinished(let damaged, let stoppedEarly):
+            return "\(damaged):\(stoppedEarly ? "early" : "full")"
         }
     }
 }

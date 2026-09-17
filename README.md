@@ -20,7 +20,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Reads straight from the archive** — nothing is ever extracted to disk, no thumbnail database is built, no "library" is imported. Open a file, read it, quit.
 - **Zero third-party dependencies** — it uses the `libarchive` (BSD-2) that already ships with macOS. The whole app is about 1.9 MB: a 1.2 MB main binary plus roughly 0.5 MB for the two Finder extensions.
 - **A single sequential scanner** — pages are pulled through one streaming pass, so page 200 costs about the same as page 1. The naive alternative (reopening the archive per page) degrades quadratically on solid 7z archives: measured **71× slower** at 150 pages, and getting worse as the archive grows.
-- **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
+- **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory, and the thumbnail pool has its own 20 M pixel budget on top of its count cap. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
 - **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position. **Cover on its own page** (`⌥⌘C`) matches how a manga volume is actually bound: the cover stands alone, then 1-2 / 3-4 pair up. Off by default, since not every cbz is laid out as a bound volume.
 - **Quick Look integration** — press `Space` on an archive in Finder to see its cover and page count without opening the app, and let Finder show the actual cover as the file icon instead of a generic archive glyph. It ships as **two** bundled extensions (thumbnail + preview), because macOS allows exactly one extension point per `.appex`. Encrypted or unreadable archives deliberately fall back to the system icon rather than a misleading placeholder. Only `cbz / cbr / cb7 / cbt` are claimed — plain `.zip` is left alone, so ordinary ZIP files never route through Unroll.
 - **Keyboard-first** — every action is reachable without touching the mouse.
@@ -34,6 +34,8 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **A draggable progress bar** — the HUD bar scrubs: the page number follows your drag, and it only jumps when you let go (instead of decoding a page for every step).
 - **Page number in the window title** — the title bar reads "file name · P.3/200", so multiple windows and Dock hover tell you where you are. `⇧⌘F` reveals the current file in Finder when you want to move on to the next volume.
 - **Encrypted archives can be unlocked with a password** — an encrypted cbz / cbr opens straight into a password prompt, and the correct password gets you reading. For partially encrypted archives, `⇧⌘K` unlocks the locked pages mid-read. The password lives in memory only: never written to disk, never remembered, never in a report. Formats the system library genuinely cannot decrypt (encrypted 7z) get no prompt at all — they get an honest explanation. See below.
+- **Check an archive's integrity** (`⌥⌘V`) — verifies every page's bytes and **names the page numbers that fail**, instead of leaving you to discover them by reading. An archive whose directory is intact but whose page data is damaged is the most common kind of corruption, and "it opened" does not mean "it's sound". Read-only, no decoding pass, and it never reports "stopped early" as "all clear".
+- **Opening a large archive never freezes the app** — listing the archive runs off the main thread and is cancellable, so a network volume or a several-thousand-page archive no longer blocks the window (and switching archives takes effect immediately instead of waiting for the previous read to finish).
 - **Native SwiftUI, macOS 14+, sandboxed, and with no network permission at all.**
 
 ## Measured performance
@@ -152,6 +154,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⌘S` | Save the current page as an image (whole spread in two-page mode) |
 | `⇧⌘F` | Reveal the current file in Finder |
 | `⇧⌘K` | Enter the archive's password to unlock encrypted pages (available when the current archive has any) |
+| `⌥⌘V` | Check the archive's integrity (reports which page is broken; read-only) |
 | `⌘3` / `⌘4` / `⌘5` / `⌘6` | Fit window / fit width / fit height / actual size (1:1) |
 | `⌘D` | Add / remove a bookmark on the current page |
 | `⌥⌘↑` / `⌥⌘↓` | Previous / next bookmark (wraps at the ends) |
@@ -175,6 +178,7 @@ Crash reporting is **opt-in and manual**. If the app was killed or quit abnormal
 - **RAR 4 is unverified** — RAR 5 has been tested against real samples; RAR 4 has not.
 - **Very large solid 7z archives** cost roughly 90 ms of LZMA2 decompression per page. Prefetching is designed to hide that, but jumping far ahead in a huge solid archive has a real, visible cost.
 - **Resume and bookmarks identify an archive by "file name + file size"** — rename the file, or change its contents so the size differs, and it counts as a different archive: your progress and bookmarks stay behind. That is the price of never storing a path.
+- **The integrity check (⌥⌘V) verifies bytes, not pixels** — it uses the checksums the archive format itself carries, so it finds data corruption but does not decode every image. That is deliberate: adding a decode pass would turn 200 pages from a moment into minutes, and a failed decode only means "this app can't read it", not "the file is broken". Encrypted pages are skipped rather than reported as damage.
 - **Not notarized** — ad-hoc signing only, hence the first-launch Gatekeeper step above. This applies to the bundled Quick Look extensions too: if `Space` does nothing on another machine, they are the first thing to suspect (macOS is stricter about loading third-party extensions than about launching an app). `Scripts/verify-quicklook.sh` reports exactly which stage fails.
 - **Quick Look previews show the first page only.** No paging inside the preview panel — that would mean rebuilding the reader inside a panel that doesn't take keyboard input. Reading still happens in the app.
 - **macOS only in v1.** The archive engine is kept as a standalone SwiftPM package (`ArchiveKit`) specifically so an iOS / iPadOS build can reuse it later.

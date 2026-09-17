@@ -107,7 +107,15 @@ public final class ArchiveDocument: Sendable {
     ///   .encrypted               全部图片加密 + zip + **未给密码** → UI 弹密码框
     ///   .wrongPassphrase         给了密码但不对 → UI 提示重输(非终局)
     ///   .encryptedUnsupportedFormat  加密且库解不了(7z 实测死限;RAR 未实测)
-    public static func open(url: URL, passphrase: String? = nil) throws -> ArchiveDocument {
+    ///   CancellationError        调用方通过 isCancelled 叫停(换文件 / 关窗)
+    ///
+    /// isCancelled(2026-09-17):列目录是**同步阻塞**的 I/O 循环 —— 一个几万条目
+    /// 的大包(或在网络卷上)能跑好几秒。调用方把它丢到后台线程后,还需要一条
+    /// 「用户已经换文件了,别接着啃」的通道,否则前一个包会一路跑完,
+    /// 白占 CPU 与磁盘。回调每 `C.cancellationCheckEvery` 个条目问一次,
+    /// 开销可忽略;命中即抛 `CancellationError`(VM 已有专门分支,不写成失败态)。
+    public static func open(url: URL, passphrase: String? = nil,
+                           isCancelled: (@Sendable () -> Bool)? = nil) throws -> ArchiveDocument {
         let a = try openRawHandle(url: url, passphrase: passphrase)
         defer { dispose(a) }
 
@@ -119,8 +127,16 @@ public final class ArchiveDocument: Sendable {
         /// 密码是否已验证可用。多页加密包只需验第一条 —— 同一个包里
         /// 各条目的密码是同一个,重复验证纯属浪费(大包里每条都是整个解压)
         var passwordVerified = false
+        /// 「连续多少轮没有产出新条目」。见下方停滞守卫
+        var stagnantTurns = 0
 
         while true {
+            // 取消检查放在最前:一旦用户换了文件,连一次多余的 next_header 都不做
+            if let isCancelled, rawPaths.count % C.cancellationCheckEvery == 0,
+               isCancelled() {
+                throw CancellationError()
+            }
+
             var entry: OpaquePointer? = nil
             let r = archive_read_next_header(a, &entry)
 
@@ -129,7 +145,24 @@ public final class ArchiveDocument: Sendable {
                 throw listingFailure(code: r, handle: a, listedCount: rawPaths.count)
             }
             // r == OK 或 WARN(-20,警告但条目有效):继续处理本条
-            guard let entry else { continue }
+            //
+            // 停滞守卫(2026-09-17):正常路径每轮要么 +1 条、要么 EOF、要么抛错 ——
+            // 三者必居其一。但 `guard let entry else { continue }` 这条防御分支
+            // 在「库持续返回 OK/WARN 却给不出条目」时会**原地空转**,而原来的
+            // `while true` 没有任何上限:那是本节唯一可能挂死的地方(§5.9.2 挂起坑
+            // 在**列目录**这一侧的对应物,§5.9.4 约束 5 只盖住了读数据那侧)。
+            // 判据用「连续无产出轮数」而不是「总轮数」,这样几万页的合法大包
+            // 永远不会被误伤 —— 它每一轮都在产出
+            guard let entry else {
+                stagnantTurns += 1
+                if stagnantTurns > C.maxStagnantHeaders {
+                    throw ArchiveError.unknown(
+                        code: 0,
+                        message: "listing made no progress for \(stagnantTurns) headers")
+                }
+                continue
+            }
+            stagnantTurns = 0
 
             if rawPaths.isEmpty, let name = archive_format_name(a) {
                 format = ArchiveFormat(name: String(cString: name))
@@ -495,4 +528,15 @@ enum C {
         "jpg", "jpeg", "png", "gif", "webp", "bmp",
         "heic", "heif", "avif", "tiff", "tif",
     ]
+
+    /// 列目录时每多少个条目问一次 `isCancelled`(2026-09-17)。
+    /// 256 是「调用方等待粒度」与「调用开销」的折中:一个条目对应一次
+    /// next_header(微秒级),256 条一次回调等于零可感延迟,而用户换文件后
+    /// 最多再啃 256 个条目就停 —— 体验上就是立刻停
+    static let cancellationCheckEvery: Int = 256
+
+    /// 列目录「连续无产出」轮数上限(2026-09-17,防挂起)。
+    /// 正常路径每轮必产出一条;连续 1000 轮拿不到条目只可能是库在空转,
+    /// 此时宁可报「无法打开这个文件」也不能把主程序吊死在那里
+    static let maxStagnantHeaders: Int = 1_000
 }

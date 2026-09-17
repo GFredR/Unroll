@@ -14,6 +14,7 @@
 // (画布可能没成为 firstResponder),本地监视器与焦点解耦,行为可预期。
 // 拖拽打开挂在根视图:任何阶段(包括错误态)都可以直接拖入新文件。
 import AppKit
+import ArchiveKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -67,6 +68,14 @@ struct ReaderView: View {
                 failure: viewModel.passwordFailure,
                 onSubmit: { viewModel.submitUnlockPassword($0) },
                 onCancel: { viewModel.cancelPasswordPrompt() })
+        }
+        // 完整性检查(⌥⌘V,2026-09-17)。用自定义 Binding 而不是直接绑 @Published:
+        // 用户按 Esc / 点外面关掉时,SwiftUI 只会把标志置 false —— 那样**检查任务
+        // 会一直跑下去**,而界面已经看不见它了(白烧 CPU 还占着磁盘)。
+        // 把「关闭」这件事统一交给 dismissIntegrity(),它顺带停任务、清结论
+        .sheet(isPresented: Binding(get: { viewModel.isIntegritySheetPresented },
+                                    set: { if !$0 { viewModel.dismissIntegrity() } })) {
+            IntegritySheet(viewModel: viewModel)
         }
     }
 }
@@ -569,5 +578,138 @@ private struct PageJumpSheet: View {
         guard let index = pageIndex else { return }
         viewModel.goTo(index)
         viewModel.isJumpSheetPresented = false
+    }
+}
+
+// MARK: - 完整性检查面板(⌥⌘V,2026-09-17)
+
+/// 三态:进行中(带进度)/ 干净 / 有问题。
+///
+/// 判据与文案分工的要点:结论**不是**「有没有坏页」这一个布尔,而是三件事
+/// 分开说 —— 坏页数、是否跑完、跳过了多少加密页。合成一句话必然要说谎:
+///   · 有坏页但没跑完 → 真正的坏页只会更多,不能报「共 N 页坏了」;
+///   · 没坏页但没跑完 → 更不能报「没有损坏」(那是把「没查到」当「查到没有」);
+///   · 加密页跳过了 → 它们既不是坏页也不能算检查过。
+/// 这三句话都说出来,用户才知道该不该去重新下载这个包。
+private struct IntegritySheet: View {
+
+    @ObservedObject var viewModel: ReaderViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
+            Text(L10n.tr("integrity.title"))
+                .font(.system(size: DesignSystem.Typography.title, weight: .semibold))
+
+            if let state = viewModel.integrity {
+                switch state {
+                case .running(let checked, let total):
+                    running(checked: checked, total: total)
+                case .finished(let report):
+                    result(report)
+                }
+            }
+
+            actions
+        }
+        .padding(DesignSystem.Spacing.lg)
+        // 与密码面板同一套口径:居中面板 + 明确上下限,不让内容横贯整窗
+        .frame(minWidth: 420, maxWidth: 620, alignment: .leading)
+    }
+
+    // MARK: 进行中
+
+    private func running(checked: Int, total: Int) -> some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            // ProgressView 的 total 不能是 0(空文档到不了这里,但纯函数式的
+            // 防御:除零在 SwiftUI 里不报错,只是画出一条诡异的进度条)
+            ProgressView(value: Double(checked), total: Double(max(total, 1)))
+                .frame(maxWidth: .infinity)
+            Text(L10n.tr("integrity.running", checked, total))
+                .font(.system(size: DesignSystem.Typography.footnote))
+                .foregroundStyle(.secondary)
+            Text(L10n.tr("integrity.hint"))
+                .font(.system(size: DesignSystem.Typography.footnote))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: 结论
+
+    @ViewBuilder
+    private func result(_ report: ArchiveIntegrityReport) -> some View {
+        VStack(alignment: .leading, spacing: DesignSystem.Spacing.sm) {
+            // 三个标题互斥且有序:没跑完的结论最弱,放最前 ——
+            // 「有 3 页坏了」和「只查到一半」同时成立时,后者是更重要的信息
+            if report.stoppedEarly {
+                headline(icon: "pause.circle.fill", L10n.tr("integrity.stopped.title"))
+                Text(L10n.tr("integrity.stopped.body",
+                             min(report.lastCheckedPage + 1, report.pages), report.pages))
+                    .font(.system(size: DesignSystem.Typography.body))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if report.damagedCount > 0 {
+                headline(icon: "exclamationmark.triangle.fill",
+                         L10n.tr("integrity.damaged.title", report.damagedCount))
+            } else {
+                headline(icon: "checkmark.seal.fill", L10n.tr("integrity.ok.title"))
+                Text(L10n.tr("integrity.ok.body", report.pages))
+                    .font(.system(size: DesignSystem.Typography.body))
+                    .foregroundStyle(.secondary)
+            }
+
+            if report.damagedCount > 0 {
+                Text(L10n.tr("integrity.damaged.body", damagedList(report)))
+                    .font(.system(size: DesignSystem.Typography.body))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(L10n.tr("integrity.damaged.summary",
+                             max(report.pages - report.damagedCount, 0)))
+                    .font(.system(size: DesignSystem.Typography.body))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if report.skippedEncrypted > 0 {
+                Text(L10n.tr("integrity.skipped", report.skippedEncrypted))
+                    .font(.system(size: DesignSystem.Typography.footnote))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func headline(icon: String, _ text: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignSystem.Spacing.xs) {
+            Image(systemName: icon)
+                .accessibilityHidden(true)   // 装饰性图标不进 VoiceOver(AGENTS.md 十一.3)
+            Text(text)
+                .font(.system(size: DesignSystem.Typography.body, weight: .semibold))
+        }
+        .foregroundStyle(DesignSystem.Palette.brand)
+    }
+
+    /// 坏页清单 → 一句「第 12 页、第 57 页」。
+    /// 超过报告上限时补一句「只列出前 N 个」—— 悄悄截断会让人以为只有这些
+    private func damagedList(_ report: ArchiveIntegrityReport) -> String {
+        let items = report.damagedPages.map { L10n.tr("integrity.pageItem", "\($0 + 1)") }
+        var text = items.joined(separator: L10n.tr("integrity.pageSeparator"))
+        if report.damagedCount > report.damagedPages.count {
+            text += L10n.tr("integrity.damaged.truncated", ArchiveIntegrityReport.damagedPageLimit)
+        }
+        return text
+    }
+
+    // MARK: 按钮
+
+    private var actions: some View {
+        HStack(spacing: DesignSystem.Spacing.sm) {
+            Spacer()
+            // 「停止」只在跑的时候有意义:停止后**面板不关**,让用户看到
+            // 「查到第几页」—— 那正是「我到底查了多少」的答案
+            if case .running = viewModel.integrity {
+                Button(L10n.tr("integrity.stop")) { viewModel.cancelIntegrityCheck() }
+            }
+            Button(L10n.tr("integrity.done")) { viewModel.dismissIntegrity() }
+                .keyboardShortcut(.cancelAction)      // Esc
+        }
     }
 }

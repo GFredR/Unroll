@@ -50,7 +50,6 @@ actor PageStore {
     // MARK: - 观测
 
     var pageCount: Int { document.entries.count }
-    var archiveProtection: ArchiveProtection { document.protection }
 
     // MARK: - 读页(图 5 REQ→NEW→DEC→PUT 主链)
 
