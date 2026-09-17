@@ -18,7 +18,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 ## Features
 
 - **Reads straight from the archive** — nothing is ever extracted to disk, no thumbnail database is built, no "library" is imported. Open a file, read it, quit.
-- **Zero third-party dependencies** — it uses the `libarchive` (BSD-2) that already ships with macOS. The entire app is under 1 MB.
+- **Zero third-party dependencies** — it uses the `libarchive` (BSD-2) that already ships with macOS. The whole app is about 1.9 MB: a 1.2 MB main binary plus roughly 0.5 MB for the two Finder extensions.
 - **A single sequential scanner** — pages are pulled through one streaming pass, so page 200 costs about the same as page 1. The naive alternative (reopening the archive per page) degrades quadratically on solid 7z archives: measured **71× slower** at 150 pages, and getting worse as the archive grows.
 - **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
 - **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position. **Cover on its own page** (`⌥⌘C`) matches how a manga volume is actually bound: the cover stands alone, then 1-2 / 3-4 pair up. Off by default, since not every cbz is laid out as a bound volume.
@@ -45,7 +45,7 @@ The numbers below come from a benchmark that drives the real page pipeline throu
 | `.cbz` (ZIP) | 200 | **0.15 GB** | 2.6 ms |
 | `.cb7` (solid 7z) | 200 | **0.06 GB** | 2.4 ms |
 
-Sitting on page 1 of a **437 MB** archive, the shipped app holds **183 MB** resident. The app itself is **928 KB** on disk.
+Sitting on page 1 of a **437 MB** archive, the shipped app holds **183 MB** resident. The app is **1.9 MB** on disk (a 1.2 MB main binary plus ~0.5 MB for the two Quick Look extensions), and the DMG is **756 KB**.
 
 The number worth reading twice is the one behind the sequential scanner. Reopening the archive for each page — the obvious way to build this — is **71× slower** by page 150 on a solid 7z archive, and the gap widens as the archive grows, because solid compression means every page drags the ones before it. That is why pages are pulled through a single streaming pass instead.
 

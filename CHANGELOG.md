@@ -21,7 +21,7 @@
 - **加密归档可输密码解压阅读**:加密的 cbz / cbr 打开时直接弹密码输入框,输对即读、输错原地说明原因(区分大小写)并重试,不再只有一句"暂不支持"。**ZIP 的 ZipCrypto 与传统加密、AES-256 均实测可解**;部分加密的包在阅读中用 ⇧⌘K(或占位卡片上的按钮)一次解锁全部加密页,**阅读位置不动**。**加密 7z 刻意不给密码框** —— 系统 libarchive 实测给对密码也解不开,让你输一个注定无效的密码比直接说不支持更糟。加密 RAR 给入口但未实测,措辞弱于 7z。密码只驻留内存:不落盘、不记入钥匙串(不做"记住密码")、不进崩溃报告(只记"需要密码"与"成功/失败")
 - 加密归档三态呈现:无 / 部分页占位卡片 / 整档说明,绝不闪退;**「密码不对」与「文件损坏」分开报**——前者再试一次,后者别浪费时间
 - 崩溃采集 L0:零依赖零后端,异常退出自愿上报(App 自身零网络请求)
-- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.8 MB(其中绝大多数是 Universal 2 二进制与两个 Finder 扩展)
+- 零第三方依赖(系统 libarchive,BSD-2);Universal 2;App 约 1.9 MB(主程序 1.2 MB + 两个 Finder 扩展约 0.5 MB),DMG 756 KB
 - **产物可自证来源**:App 内记有构建时的提交号,拿到 dmg 的人不必只信 SHA256 —— 打开包里的 `Info.plist` 就能核对这个二进制对应哪个公开提交。本项目没有付费签名,这是一条可以自查的信任锚
 
 **English**
@@ -41,7 +41,7 @@
 - **Encrypted archives can be unlocked with a password**: an encrypted cbz / cbr opens straight into a password prompt — the right password gets you reading, a wrong one explains itself in place (case-sensitive) and lets you retry, instead of the old flat "not supported yet". **ZipCrypto and AES-256 ZIP are both verified to open**; for partially encrypted archives, `⇧⌘K` (or the button on the placeholder card) unlocks every locked page at once **without moving your reading position**. **Encrypted 7z deliberately gets no password box** — the system libarchive cannot decrypt it even with the correct password, and asking for a password that cannot work is worse than plainly saying it's unsupported. Encrypted RAR does get a prompt but is untested, and is worded more cautiously than 7z. The password stays in memory: never written to disk, never stored in the Keychain (no "remember password"), never sent in a crash report (only "a password was required" and success/failure)
 - Encrypted archives rendered in three states: none / placeholder cards for locked pages / explanation — never crashes; **"wrong password" and "damaged file" are reported separately**, because the first means try again and the second means stop wasting time
 - Crash reporting L0: zero dependencies, zero backend, voluntary upload (the app itself makes no network requests)
-- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.8 MB (mostly the Universal 2 binary plus the two Finder extensions)
+- Zero third-party dependencies (system libarchive, BSD-2); Universal 2; app about 1.9 MB (1.2 MB main binary plus ~0.5 MB for the two Finder extensions), DMG 756 KB
 - **The build can prove its own origin**: the app records the commit it was built from, so a downloader does not have to take the SHA256 on faith — read `Info.plist` inside the bundle and check which public commit this binary corresponds to. With no paid signing certificate in play, that is a trust anchor you can verify yourself
 
 ## 1.0.0 — 2026-09-15（仅本机打标，从未发布 / tagged locally, never published）
