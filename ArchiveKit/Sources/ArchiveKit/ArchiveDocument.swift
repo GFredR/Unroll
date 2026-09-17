@@ -1,8 +1,21 @@
 // AI-Generated | 可修改
 // ArchiveDocument —— 打开归档的门面(设计文档 §4.1 / §4.3 图 3 / §5.9 图 10)
 // ----------------------------------------------------------------------------
-// 生命周期:open(url) 列目录建索引(含四态检测)→ data(at:) 按页取原始字节
+// 生命周期:open(url:passphrase:) 列目录建索引(含四态检测)→ data(at:) 按页取原始字节
 //          → (上层 PageStore 交 ImageIO 解码)。
+//
+// v2 密码(2026-09-17):open 接受可选 passphrase,在 archive_read_open **之前**
+// 注入(库的要求,见 shim.h)。自此加密归档可解 —— 但**只有 ZIP 真能解**:
+// ZipCrypto 与 AES-256 实测都能读出正确字节;7z 加密是库的能力死限,
+// 给了正确密码仍报 "currently not supported"(2026-09-17 实测确认)。
+//
+// 两个来自实测的设计后果(改这段代码前务必先读):
+//   ① `archive_entry_is_encrypted` 在**给了正确密码之后仍然返回 1** ——
+//      它描述的是「条目在归档里是加密存储的」,不是「现在读不出来」。
+//      所以前置拦截的判据是 `entryEncrypted[i] && passphrase == nil`,
+//      漏掉后半句会让密码解开的包每页都被误拦(2026-09-17 探针实测)。
+//   ② 密码必须在 open 时就验证一次:否则用户输错密码会「成功」进入阅读器,
+//      然后看到满屏加密占位卡片 —— 那比直接说「密码不对」糟得多。
 //
 // 与 M0 占位签名的两处有意偏离(均为 §4.4「每 Task 独立实例」的直接推论):
 //   · open 是静态工厂:对象要么完整可用、要么构造失败,不存在半初始化态
@@ -27,9 +40,18 @@ public final class ArchiveDocument: Sendable {
     /// index 即在本数组中的位置,data(at:) 以它定位。
     public let entries: [ArchiveEntry]
 
-    /// 加密四态扫描结果。终局态(全部/头部加密)已在 open 抛错,
-    /// 这里只会是 .none 或 .partial —— 加密页留给 data(at:) 逐页报错。
+    /// 加密四态扫描结果。终局态(全部/头部加密且**无密码可用**)已在 open 抛错,
+    /// 这里只会是 .none 或 .partial。
+    ///
+    /// 密码语义(2026-09-17):带对密码打开时,原本加密的页已可读,故返回 .none ——
+    /// 「这本包是加密的」这件事改由 `encryptedEntryCount` 表达(两者正交:
+    /// 一个说「现在读得出来吗」,一个说「归档里有多少条是加密存储的」)
     public let protection: ArchiveProtection
+
+    /// **图片条目**中加密存储的条数(open 扫描所得,与是否解锁无关)。
+    /// 只算图片:一个加密的 note.txt 不影响阅读体验(与 protection 的口径一致)。
+    /// 用途:UI 判断要不要给「输入解压密码」入口、解锁后提示「已解开 N 页」
+    public let encryptedImageCount: Int
 
     /// libarchive 识别的归档格式(错误文案分流依据,§5.9.3 图 10 FMT 分支)
     public let format: ArchiveFormat
@@ -38,20 +60,33 @@ public final class ArchiveDocument: Sendable {
     /// internal(非 private):SequentialPageReader 复用同一打开逻辑(§5.1 顺序扫描器)
     let url: URL
 
+    /// 打开时提供的解压密码(nil = 未提供 / 归档未加密)。
+    ///
+    /// **安全约束(改动前必读)**:只活在内存里 —— 不落盘、不进面包屑、不进崩溃
+    /// 报告、不进 UserDefaults。它必须每次重开实例时原样带上(data(at:) 与
+    /// SequentialPageReader 都要),否则会出现「第一页解开了、第二页又报需要密码」
+    /// 这种看不懂的故障。刻意**不做「记住密码」**:那需要写 Keychain,
+    /// 是一个关于「替用户保管秘密」的独立决策,不顺手做掉。
+    let passphrase: String?
+
     /// entries[i] 对应的原始条目序号(next_header 遍历顺序)。
     /// internal:SequentialPageReader 靠它做前向推进定位
     let rawPositions: [Int]
 
-    /// entries[i] 是否加密(open 扫描时记录,读页时免二次探测)。
-    /// internal:SequentialPageReader 前置拦截加密页,不消耗流位置
+    /// entries[i] 是否加密存储(open 扫描时记录,读页时免二次探测)。
+    /// internal:SequentialPageReader 前置拦截加密页,不消耗流位置。
+    /// ⚠️ 给了正确密码后仍为 true(见文件头实测①),故拦截必须同时看 passphrase
     let entryEncrypted: [Bool]
 
     private init(url: URL, entries: [ArchiveEntry], protection: ArchiveProtection,
-                 format: ArchiveFormat, rawPositions: [Int], entryEncrypted: [Bool]) {
+                 encryptedImageCount: Int, format: ArchiveFormat, passphrase: String?,
+                 rawPositions: [Int], entryEncrypted: [Bool]) {
         self.url = url
         self.entries = entries
         self.protection = protection
+        self.encryptedImageCount = encryptedImageCount
         self.format = format
+        self.passphrase = passphrase
         self.rawPositions = rawPositions
         self.entryEncrypted = entryEncrypted
     }
@@ -60,15 +95,20 @@ public final class ArchiveDocument: Sendable {
 
     /// 打开归档:列目录 → 过滤图片 → 自然排序 → 加密四态判定。
     ///
+    /// passphrase(v2,2026-09-17):解压密码。nil = 未提供 —— 全加密的 zip 会抛
+    /// `.encrypted`,UI 据此弹密码框、带密码重开。对明文归档传密码无害
+    /// (库直接忽略,有单测锁死,防「加了密码反而打不开」)。
+    ///
     /// 抛错与四态的对应(全部映射 §5.9.3.1 的错误态页面文案):
     ///   .corrupted               损坏 / 非归档 / 中途 FATAL / 文件消失
     ///   .empty                   0 条目
     ///   .noImages(found:)        有条目但无图片
     ///   .headerEncrypted         列目录即 FATAL 且双信号命中(头部加密)
-    ///   .encrypted               全部图片加密 + zip(v1 无密码框,§7.3-A)
-    ///   .encryptedUnsupportedFormat  全部图片加密 + 7z/rar(库不支持,§5.9.1)
-    public static func open(url: URL) throws -> ArchiveDocument {
-        let a = try openRawHandle(url: url)
+    ///   .encrypted               全部图片加密 + zip + **未给密码** → UI 弹密码框
+    ///   .wrongPassphrase         给了密码但不对 → UI 提示重输(非终局)
+    ///   .encryptedUnsupportedFormat  加密且库解不了(7z 实测死限;RAR 未实测)
+    public static func open(url: URL, passphrase: String? = nil) throws -> ArchiveDocument {
+        let a = try openRawHandle(url: url, passphrase: passphrase)
         defer { dispose(a) }
 
         // 原始条目快照:path / size / 加密标志,按 next_header 顺序
@@ -76,6 +116,9 @@ public final class ArchiveDocument: Sendable {
         var rawSizes: [Int64?] = []
         var rawEncrypted: [Bool] = []
         var format: ArchiveFormat = .other(name: "")
+        /// 密码是否已验证可用。多页加密包只需验第一条 —— 同一个包里
+        /// 各条目的密码是同一个,重复验证纯属浪费(大包里每条都是整个解压)
+        var passwordVerified = false
 
         while true {
             var entry: OpaquePointer? = nil
@@ -94,7 +137,17 @@ public final class ArchiveDocument: Sendable {
             rawPaths.append(String(cString: archive_entry_pathname(entry)))
             let size = archive_entry_size(entry)
             rawSizes.append(size >= 0 ? size : nil)
-            rawEncrypted.append(archive_entry_is_encrypted(entry) == 1)
+            let isEncrypted = archive_entry_is_encrypted(entry) == 1
+            rawEncrypted.append(isEncrypted)
+
+            // 密码就地预验证:刚好证明密码对不对的时刻,流正停在第一条加密
+            // 条目上,这里试读零额外开销(读剩的数据由下一次 next_header
+            // 自动跳过 —— libarchive 语义)。不这么做的话,输错密码会「成功」
+            // 进入阅读器再满屏占位卡片,比直接说「密码不对」糟得多。
+            if isEncrypted, passphrase != nil, !passwordVerified {
+                try verifyPassphrase(a)
+                passwordVerified = true
+            }
         }
 
         // ---- 列目录后的终局判定(图 10) ----
@@ -125,16 +178,21 @@ public final class ArchiveDocument: Sendable {
 
         // 加密统计只看图片条目:非图片条目(note.txt)是否加密不影响阅读体验
         // ——「全部图片加密」即全不可读,按终局态处理
-        if encryptedImageCount == entries.count {
+        // (带对了密码则不抛:那些页现在读得出来,密码验证已在上面就地完成)
+        if encryptedImageCount == entries.count, !passwordVerified {
             throw encryptionError(for: format)
         }
-        let protection: ArchiveProtection = encryptedImageCount == 0
+        // 密码验证通过 → 加密页已可读,protection 归 .none。
+        // 「这本包是加密的」这件事改由 encryptedImageCount 单独表达 —— 两者正交:
+        // protection 回答「现在读得出来吗」,encryptedImageCount 回答「原本有多少页加密」
+        let protection: ArchiveProtection = (encryptedImageCount == 0 || passwordVerified)
             ? .none
             : .partial(encryptedCount: encryptedImageCount)
 
         return ArchiveDocument(url: url, entries: entries, protection: protection,
-                               format: format, rawPositions: rawPositions,
-                               entryEncrypted: entryEncrypted)
+                               encryptedImageCount: encryptedImageCount,
+                               format: format, passphrase: passphrase,
+                               rawPositions: rawPositions, entryEncrypted: entryEncrypted)
     }
 
     // MARK: - 按页读取(图 4 RAW 段)
@@ -144,17 +202,22 @@ public final class ArchiveDocument: Sendable {
     /// 代价是 O(index) 次 header 跳走,zip 可接受,solid 7z 本就 O(n)(§5.1)。
     ///
     /// 加密页抛错(不冒泡成整档失败,§5.9.4 约束 4):
-    ///   zip → .encrypted;7z/rar → .encryptedUnsupportedFormat
+    ///   · **未提供密码** → zip:`.encrypted`;7z/rar:`.encryptedUnsupportedFormat`
+    ///     (提前拦截省一次读,也给得准话:这些页不是坏了,是要密码)
+    ///   · **提供了密码** → 不拦截,真读。读不动才是真的读不动
+    ///     ⚠️ 必须带 `passphrase == nil` 这半句:给对密码后
+    ///     `archive_entry_is_encrypted` 仍返回 1(2026-09-17 探针实测),
+    ///     只看标志位会把已解开的页全误拦成「需要密码」
     public func data(at index: Int) throws -> Data {
         guard entries.indices.contains(index) else {
             // 调用方 bug 兜底:绝不 trap(§5.9.4「绝不闪退」)
             throw ArchiveError.unknown(code: 0, message: "page index \(index) out of range 0..\(entries.count)")
         }
-        if entryEncrypted[index] {
+        if entryEncrypted[index], passphrase == nil {
             throw Self.encryptionError(for: format)
         }
 
-        let a = try Self.openRawHandle(url: url)
+        let a = try Self.openRawHandle(url: url, passphrase: passphrase)
         defer { Self.dispose(a) }
 
         // 逐 header 走到目标原始位置;next_header 自动跳过前一_entry 未读数据
@@ -188,9 +251,14 @@ public final class ArchiveDocument: Sendable {
             let r = archive_read_data_block(a, &buff, &len, &offset)
             if r == C.EOF { return out }                        // 本条目读完
             if r < 0, r != C.WARN {
-                // 加密页无密码到达这里(zip -25);格式分流已由 entryEncrypted
-                // 前置拦截,走到这说明是真实读损坏 → .corrupted
-                throw ArchiveError.corrupted
+                // 负值有两个来源:
+                //   · **真实读损坏** —— 常态,翻译成 .corrupted
+                //   · **密码没带上** —— 前置拦截(`entryEncrypted && passphrase == nil`)
+                //     本该拦住,但 `SequentialPageReader` 重建句柄时若漏传密码就会漏网。
+                //     2026-09-17 用注入验证过那种情形:错误串是 "Passphrase required"。
+                //     若这里一律报 .corrupted,用户看到的是「文件损坏」——
+                //     一个查不出原因的误导性结论。所以分流一次,让症状指向真实原因
+                throw Self.passphraseFailure(code: r, handle: a)
             }
             if let buff, len > 0 {
                 out.append(contentsOf: UnsafeRawBufferPointer(start: buff, count: len))
@@ -203,10 +271,62 @@ public final class ArchiveDocument: Sendable {
 
     // MARK: - C 句柄与错误翻译
 
-    /// 新建读取句柄:filter/format 全开 + 按 §3.2 显式注册 rar/7zip。
+    /// 试读当前条目,验证密码是否可用(仅 open 阶段调用:流正好停在第一条加密条目)。
+    ///
+    /// 判据是**真读**,不是任何标志位 —— `archive_entry_is_encrypted` 在给对
+    /// 密码后仍然返回 1(实测),问不出有用信息;而 libarchive 的密码错是在
+    /// read 时报 -25 + "Incorrect passphrase"(ZipCrypto 与 AES 皆然,实测)。
+    ///
+    /// **为什么尽量读完整个条目**:ZipCrypto 的校验字节在条目**末尾**
+    /// (PKWARE 传统加密把 CRC 高位藏在最后一字节),只读开头有 1/256 的概率
+    /// 放过错误密码 —— 那会让用户「成功」进入阅读器,然后翻一页失败一页。
+    /// 超大条目不为这个付全额代价:读到 `passphraseProbeBytes` 即算通过,
+    /// 真读时若有问题由 `readCurrentEntryData` 照常报错兜底。
+    private static func verifyPassphrase(_ a: OpaquePointer) throws {
+        var total = 0
+        while total < C.passphraseProbeBytes {
+            var buff: UnsafeRawPointer? = nil
+            var len = 0
+            var offset: Int64 = 0
+            let r = archive_read_data_block(a, &buff, &len, &offset)
+            if r == C.EOF { return }                  // 读完 → 密码确定无误
+            if r < 0, r != C.WARN {
+                throw passphraseFailure(code: r, handle: a)
+            }
+            total += len
+        }
+    }
+
+    /// 读取失败的错误翻译,按 libarchive 的错误串分流。
+    /// **错误串只做内部分流,绝不进 UI**(§5.9.4 约束 6:那串英文可能含完整路径)。
+    ///
+    /// 分流表(错误串取自 2026-09-17 实测;库若换了措辞会全部落到 .corrupted,
+    /// 即「最坏降级为损坏」,不会把损坏误报成密码问题):
+    ///   "Incorrect passphrase" / "Passphrase required" → .wrongPassphrase
+    ///   "not supported"                                 → .encryptedUnsupportedFormat
+    ///   (其余)                                          → .corrupted
+    ///
+    /// 两个调用点,职责不同:
+    ///   · `verifyPassphrase` —— open 阶段确认密码对不对;
+    ///   · `readCurrentEntryData` —— 兜住「密码没带上」这类漏网(见那里的注释)
+    private static func passphraseFailure(code: Int32, handle: OpaquePointer) -> ArchiveError {
+        if let raw = archive_error_string(handle) {
+            let message = String(cString: raw)
+            if message.contains("Incorrect passphrase") || message.contains("Passphrase required") {
+                return .wrongPassphrase
+            }
+            if message.contains("not supported") {
+                return .encryptedUnsupportedFormat
+            }
+        }
+        return .corrupted
+    }
+
+    /// 新建读取句柄:filter/format 全开 + 按 §3.2 显式注册 rar/7zip
+    /// + (v2)在 open 之前注入解压密码。
     /// 打不开(文件不存在/无权限)→ .corrupted,文案对应「无法打开这个文件」。
     /// internal:SequentialPageReader 重开实例(后向跳页)复用同一逻辑
-    static func openRawHandle(url: URL) throws -> OpaquePointer {
+    static func openRawHandle(url: URL, passphrase: String? = nil) throws -> OpaquePointer {
         guard let a = archive_read_new() else {
             throw ArchiveError.unknown(code: 0, message: "archive_read_new returned NULL")
         }
@@ -221,6 +341,14 @@ public final class ArchiveDocument: Sendable {
         // §3.2:format_all 已含 rar/7zip,显式注册可拿到更早的格式报错
         if archive_read_support_format_rar(a) < C.WARN { failed = true }
         if archive_read_support_format_7zip(a) < C.WARN { failed = true }
+        // 密码必须在 open_filename **之前**注入(shim.h:libarchive 在 open 时
+        // 初始化各格式的解密上下文,之后再设就来不及了)。
+        // 返回值刻意不参与 failed 判定:若库拒绝这个密码,后续读到加密条目时
+        // 会报 "Passphrase required" → 翻译成 .wrongPassphrase,用户看到的是
+        // 「密码不对」而不是莫名其妙的「文件损坏」—— 让真实错误暴露在它该出现的地方
+        if let passphrase, !failed {
+            _ = passphrase.withCString { archive_read_add_passphrase(a, $0) }
+        }
         if !failed {
             // archive_read_open_filename 内部自行复制路径串,传值生命周期安全
             failed = url.path.withCString {
@@ -257,24 +385,30 @@ public final class ArchiveDocument: Sendable {
         return .corrupted
     }
 
-    /// 全部图片加密时按格式分流错误类型。
+    /// 加密页无法读取时的错误分流 —— 决定 UI 给不给密码入口。
     ///
-    /// ⚠️ **勿把 `.rar` 与 `.sevenZip` 等同看待 —— 两者证据强度完全不同:**
-    /// - `.sevenZip`:**实测确认**库不支持。libarchive 3.7.4 报错原文本就是
-    ///   `currently not supported`,有正确密码也读不出(§5.9.1,2026-09-09 实测)。
-    /// - `.rar`:**未实测**,此处只是保守推断。官方 README 写 "RAR and RAR 5.0",
-    ///   WASM 移植(libarchivejs)提供 `usePassword()` 且标注支持 RAR v4/v5 →
-    ///   **RAR5 加密很可能实际可解**。若属实,则本分支对 RAR 是「过早放弃」。
+    /// 判据是**证据强度**,不是格式名好不好听(2026-09-17 实测校准):
+    /// - `.zip`:**实测可解** —— ZipCrypto 与 AES-256 都能用
+    ///   `archive_read_add_passphrase` 解开,解出的字节与源图逐字节一致。
+    /// - `.rar`:**未实测,但给入口** —— 本机既无 RAR 压缩工具也无加密样本,
+    ///   但官方 README 写 "RAR and RAR 5.0",WASM 移植(libarchivejs)提供
+    ///   `usePassword()` 且标注支持 RAR v4/v5,**证据倾向可解**。
+    ///   给了才有机会;不给就是替用户提前放弃。真遇到解不了的,
+    ///   库会报 "not supported" → 经 `passphraseFailure` 落到
+    ///   `.encryptedUnsupportedFormat` → UI 说「这个归档解不开」(而不是让人
+    ///   对着密码框一直试)。**这是「先给机会、再如实说不行」,不是乐观假设。**
+    /// - `.sevenZip`:**实测死限,不给入口** —— 报错原文 `currently not supported`,
+    ///   **给对正确密码也一样**(2026-09-17 用 py7zr 样本复测确认)。
+    ///   已确认无解还让用户输密码是欺骗,不是功能。
+    /// - `.tar` / `.other`:tar 无加密语义,此分支实际不可达。
     ///
-    /// v1 不做密码框(§7.3-A),所以二者当前 UI 结果一致,**但文案依据不同**:
-    /// 7z 可如实说「系统库不支持」,RAR 只能说「当前版本暂不支持」。
-    /// 拿到加密 RAR 样本后必须复测并据实改写(设计文档 §5.8、§5.9.3.1 注 3)。
+    /// 拿到加密 RAR 样本后必须复测并据实改写(设计文档 §5.8、测试文档 §6)。
     /// internal:SequentialPageReader 加密页前置拦截复用同一分流(§5.9.3 图 10 FMT 分支)
     static func encryptionError(for format: ArchiveFormat) -> ArchiveError {
         switch format {
-        case .zip: return .encrypted
-        case .sevenZip, .rar: return .encryptedUnsupportedFormat
-        case .tar, .other: return .encryptedUnsupportedFormat   // tar 无加密语义,此分支实际不可达
+        case .zip, .rar: return .encrypted      // 给密码入口:zip 实测可解,rar 证据倾向可解
+        case .sevenZip: return .encryptedUnsupportedFormat
+        case .tar, .other: return .encryptedUnsupportedFormat
         }
     }
 
@@ -348,6 +482,13 @@ enum C {
     /// 单条目 data_block 迭代上限(§5.9.4 约束 5)。
     /// 10KB/块 × 100 万块 = 10GB,远超任何单页图片,正常流程永远到不了。
     static let maxDataBlocks: Int = 1_000_000
+
+    /// 密码验证的试读上限(8MB,2026-09-17)。
+    /// 普通漫画页远小于它,所以实际等价于「读完整个条目」——
+    /// ZipCrypto 的校验字节藏在条目末尾,读完整条才能确定密码对错
+    /// (细节见 `verifyPassphrase`)。留这个上限只拦住「加密包里塞了个
+    /// 200MB 的 PDF」这类极端情形:那时读满 8MB 就放行,真读时再报错兜底
+    static let passphraseProbeBytes: Int = 8 * 1024 * 1024
 
     /// 受支持的图片扩展名(小写;isListedImage 已做 lowercased)
     static let imageExtensions: Set<String> = [

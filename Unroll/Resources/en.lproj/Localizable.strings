@@ -16,17 +16,17 @@
 
 /* ---- Archive-level errors (§5.9.3.1; final polish in M3) ---- */
 
-/* #1 Fully encrypted ZIP */
+/* #1 Fully encrypted ZIP — as of v2 this prompts for a password; this string only backs the defensive branch (see openFailure) */
 "archive.encrypted.title" = "This archive is encrypted";
-"archive.encrypted.zip.body" = "The files in this archive all require a password.\nEntering a password isn't supported in this version.";
+"archive.encrypted.zip.body" = "The files in this archive require a password.";
 
-/* #2 Encrypted 7z content (verified: system library limitation — say it honestly) */
+/* #2 Encrypted 7z content (verified: system library limitation — correct password doesn't help either) */
 "archive.encrypted.7z.title" = "Can't read encrypted 7z content";
 "archive.encrypted.7z.body" = "The system decompression library can't decrypt 7z content, even with the correct password.\nPlease use an unencrypted archive, or extract it with another tool first.";
 
-/* #3 Encrypted RAR content (⚠️ unverified; wording tentative, §5.8) */
+/* #3 Encrypted RAR content (⚠️ still unverified — wording must stay WEAKER than 7z, §5.8) */
 "archive.encrypted.rar.title" = "Can't read encrypted RAR content";
-"archive.encrypted.rar.body" = "The system decompression library can't decrypt RAR content.\nPlease use an unencrypted archive, or extract it with another tool first.";
+"archive.encrypted.rar.body" = "The system decompression library may not support this RAR's encryption.\nTry another archive, or extract it with another tool first.";
 
 /* #4 Header encrypted */
 "archive.encrypted.header.title" = "Can't read this archive";
@@ -34,7 +34,22 @@
 
 /* #5 Partially encrypted · per-page placeholder card */
 "archive.page.encrypted.title" = "This page is encrypted";
-"archive.page.encrypted.subtitle" = "%ld other pages can be read normally";
+"archive.page.encrypted.subtitle" = "%ld other pages can be read; enter the password to unlock them too";
+
+/* #6 Password prompt (v2, 2026-09-17) */
+"archive.password.title" = "This file needs a password";
+"archive.password.body" = "Enter the archive's password to view its contents.";
+"archive.password.unlock.title" = "Unlock encrypted pages";
+"archive.password.unlock.body" = "Enter the password to unlock the pages that can't be read.";
+"archive.password.placeholder" = "Archive password";
+"archive.password.submit" = "Unlock";
+"archive.password.cancel" = "Cancel";
+"archive.password.reveal" = "Show password";
+"archive.password.hide" = "Hide password";
+"archive.password.wrong.title" = "Wrong password";
+"archive.password.wrong.body" = "Try again. Passwords are case-sensitive — watch out for caps lock, input method, and leading or trailing spaces.";
+"archive.password.unsupported.title" = "This archive can't be unlocked";
+"archive.password.unsupported.body" = "The system decompression library doesn't support this archive's encryption, so no password will work.";
 
 /* #6 Corrupted / not an archive */
 "archive.corrupted.title" = "Can't open this file";
@@ -123,9 +138,10 @@
 /* Window title: file name · page */
 "reader.window.title" = "%@ · P.%ld/%ld";
 
-/* File menu: save current page (⌘S) / show in Finder (⇧⌘F) */
+/* File menu: save current page (⌘S) / show in Finder (⇧⌘F) / enter archive password (⇧⌘K) */
 "app.menu.saveCurrentPage" = "Save Current Page…";
 "app.menu.revealInFinder" = "Show in Finder";
+"app.menu.unlock" = "Enter Archive Password…";
 
 /* Write failure (deliberately without the system error text — it may carry a full path) */
 "app.alert.saveFailed.title" = "Couldn't Save";

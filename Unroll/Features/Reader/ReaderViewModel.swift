@@ -31,6 +31,11 @@ final class ReaderViewModel: ObservableObject {
         case noDocument            // 空态:等待拖入 / 双击
         case opening
         case reading
+        /// 归档加密,等用户输入密码(v2,2026-09-17)。
+        /// **刻意不叫 failed**:它不是终局错误,而是流程的一个中间态 ——
+        /// 输对了就进阅读,取消就回空态。当成失败会让文案写成「打不开」,
+        /// 而事实是「还没打开」(两者对用户的意义完全不同)
+        case needsPassword
         case failed(Failure)
     }
 
@@ -147,6 +152,25 @@ final class ReaderViewModel: ObservableObject {
     /// 部分加密包的加密页数(单页失败卡片的「其余 %d 页可读」用)
     private var encryptedPageCount = 0
 
+    // MARK: - 解压密码(v2,2026-09-17)
+
+    /// 上一次密码尝试的失败提示(nil = 没失败过 / 已成功)。
+    /// 全屏密码视图与阅读中的解锁面板共用 —— 它们本就是同一件事的两个入口
+    @Published private(set) var passwordFailure: Failure?
+
+    /// 阅读中解锁面板的显隐(部分加密包用;菜单命令置位,View 渲染 sheet)
+    @Published var isUnlockSheetPresented = false
+
+    /// 当前阅读的包里还有未解锁的加密页 → 「输入解压密码…」菜单可用。
+    /// 全加密包在 open 阶段就进了 needsPassword,走不到这里
+    var hasLockedPages: Bool {
+        phase == .reading && encryptedPageCount > 0
+    }
+
+    /// 等待密码的归档 URL。**只在内存里** —— 与密码本身同一条规则:不落盘、
+    /// 不进面包屑、不进崩溃报告。输入成功后立刻用它带密码重开
+    private var pendingPasswordURL: URL?
+
     // MARK: - 续读记忆 / 书签(2026-09-15)
 
     private let progressStore: ReadingProgress
@@ -178,9 +202,14 @@ final class ReaderViewModel: ObservableObject {
     // MARK: - 打开(图 3 主时序)
 
     /// 打开归档。重复调用 = 换书:旧 store 先 teardown,新任务不受旧任务干扰。
+    ///
+    /// passphrase(v2,2026-09-17):解压密码。nil = 未提供 —— 加密包不会被当成
+    /// 失败,而是落到 `.needsPassword`,由 UI 提示输入后再带密码调一次本方法。
+    /// 密码只以参数形式经过这里,不落任何存储。
+    ///
     /// 返回本次打开任务(UI 忽略返回值;测试可 await 等待状态机落定)
     @discardableResult
-    func open(url: URL) -> Task<Void, Never> {
+    func open(url: URL, passphrase: String? = nil) -> Task<Void, Never> {
         openTask?.cancel()
         let oldStore = store
         store = nil
@@ -196,18 +225,23 @@ final class ReaderViewModel: ObservableObject {
         presentation = PagePresentation()
         secondary = nil
         documentName = url.lastPathComponent
-        // 失败也保留:打开失败时「在访达中显示」恰恰最有用(去看一眼这文件到底是什么)
+        // 失败也保留:打开失败时「在访达里显示」恰恰最有用(去看一眼这文件到底是什么)
         documentURL = url
-        let task = Task { await performOpen(url: url) }
+        // 上一轮的密码提示不跨书:换一个包就该干干净净地重新问
+        passwordFailure = nil
+        let task = Task { await performOpen(url: url, passphrase: passphrase) }
         openTask = task
         return task
     }
 
-    private func performOpen(url: URL) async {
+    private func performOpen(url: URL, passphrase: String?) async {
         phase = .opening
         do {
-            // 加密四态预检 + 建索引全在 open 里(§5.9 图 10);终局态在此抛错
-            let document = try ArchiveDocument.open(url: url)
+            // 加密四态预检 + 建索引全在 open 里(§5.9 图 10);终局态在此抛错。
+            // 带密码打开时 ArchiveKit 已就地验证过密码(读得动才算对,见
+            // ArchiveDocument.verifyPassphrase),所以走到这里就说明密码可用 ——
+            // VM 不必也不该自己再验一次(那会多读一遍加密数据)
+            let document = try ArchiveDocument.open(url: url, passphrase: passphrase)
             try Task.checkCancellation()
 
             let store = PageStore(document: document)
@@ -216,6 +250,15 @@ final class ReaderViewModel: ObservableObject {
             if case .partial(let count) = document.protection {
                 encryptedPageCount = count
             }
+            // 打开成功 → 清掉密码流程的临时状态。密码本身住在 document 里
+            // (读每一页都要用),VM 不留副本
+            if passphrase != nil {
+                // 只有真带密码打开过才记 —— 明文包不该产生这条事件
+                Breadcrumbs.shared.record(.passphraseAttempt(success: true))
+            }
+            pendingPasswordURL = nil
+            passwordFailure = nil
+            isUnlockSheetPresented = false
             phase = .reading
 
             // 续读键:文件名 + 文件大小(stat 放后台,不占主线程,AGENTS.md 十二.1)
@@ -257,11 +300,125 @@ final class ReaderViewModel: ObservableObject {
         } catch is CancellationError {
             // 被更新的 open 抢占:不做任何状态写入,别覆盖新任务的结果
         } catch let error as ArchiveError {
-            Breadcrumbs.shared.record(.openFailed(code: Self.failureCode(error)))
-            phase = .failed(openFailure(for: error, url: url))
+            switch error {
+            case .encrypted, .wrongPassphrase:
+                // 需要密码 / 密码不对 —— 两者都是**流程中间态,不是失败**。
+                // 刻意不记 openFailed:把它记成「打开失败」会让崩溃报告里出现
+                // 一堆并不存在的故障。面包屑只记「要密码了」/「试错了一次」,
+                // **密码本身绝不记录**(白名单也只放行 on/off 这种布尔标签)
+                pendingPasswordURL = url
+                if error == .wrongPassphrase {
+                    Breadcrumbs.shared.record(.passphraseAttempt(success: false))
+                    passwordFailure = Self.passwordFailure(for: error)
+                } else {
+                    Breadcrumbs.shared.record(.passphraseRequired)
+                }
+                phase = .needsPassword
+            default:
+                pendingPasswordURL = nil
+                Breadcrumbs.shared.record(.openFailed(code: Self.failureCode(error)))
+                phase = .failed(openFailure(for: error, url: url))
+            }
         } catch {
+            pendingPasswordURL = nil
             Breadcrumbs.shared.record(.openFailed(code: "unknown"))
             phase = .failed(openFailure(for: .corrupted, url: url))
+        }
+    }
+
+    // MARK: - 解压密码的输入与取消(v2,2026-09-17)
+
+    /// 打开阶段的密码提交(全屏密码视图)。
+    ///
+    /// 刻意**不做 trim**:密码首尾的空格可能是有意义的字符,
+    /// 替用户"顺手修正"输入是密码框最经典的 bug。空串直接忽略(UI 也会禁用按钮)
+    func submitPassword(_ password: String) {
+        guard !password.isEmpty, let url = pendingPasswordURL else { return }
+        open(url: url, passphrase: password)
+    }
+
+    /// 阅读中解锁(部分加密包)的密码提交。与打开阶段**分开走两条路**,
+    /// 原因见 `unlockWithPassword` 的说明
+    func submitUnlockPassword(_ password: String) {
+        guard !password.isEmpty else { return }
+        Task { await unlockWithPassword(password) }
+    }
+
+    /// 放弃输入密码。两个入口的"放弃"含义不同:
+    /// 打开阶段 → 回空态(就当没开过);阅读中 → 只关面板,阅读不动
+    func cancelPasswordPrompt() {
+        passwordFailure = nil
+        if isUnlockSheetPresented {
+            isUnlockSheetPresented = false
+            return
+        }
+        pendingPasswordURL = nil
+        // 不留「半打开」状态:清掉 documentURL,免得「在访达中显示」
+        // 指向一个从未真正打开的归档(菜单可用但点了没意义,是很隐蔽的假状态)
+        documentURL = nil
+        documentName = nil
+        phase = .noDocument
+    }
+
+    /// 阅读中触发解锁(部分加密包):菜单命令只置位,面板归 View 渲染
+    func beginUnlock() {
+        guard hasLockedPages else { return }
+        passwordFailure = nil
+        isUnlockSheetPresented = true
+    }
+
+    /// 阅读中解锁部分加密包。
+    ///
+    /// **刻意不走 `open()`** —— 那条路是"换书"语义:一上来就 teardown 旧 store、
+    /// 清空页码与布局,于是密码打错一次就白屏一次,阅读上下文全丢。
+    /// 这里反过来:**先带密码试开,成功了才替换 store**;失败则原地不动,
+    /// 只在面板里说一句。页码 / 单双页 / 方向 / 缩放档位都没经过本次操作,自然保留。
+    ///
+    /// 解开之后 `encryptedPageCount` 归 0:不再有"读不出的页",
+    /// 占位卡片与「其余 N 页可读」的文案随之消失
+    private func unlockWithPassword(_ password: String) async {
+        guard let url = documentURL else { return }
+        do {
+            let document = try ArchiveDocument.open(url: url, passphrase: password)
+
+            // 走到这里说明密码已确认可用(ArchiveKit 在 open 里就地验证过),
+            // 下面这段是本次操作**唯一**会改动现状的地方
+            let newStore = PageStore(document: document)
+            let oldStore = store
+            store = newStore
+            pageCount = document.entries.count
+            encryptedPageCount = 0
+            Breadcrumbs.shared.record(.passphraseAttempt(success: true))
+            await oldStore?.teardown()
+
+            // 当前页用新 store 重取:之前那张是加密失败卡,现在该换成真图
+            presentation.failure = nil
+            presentation.isLoading = true
+            secondary = nil
+            isUnlockSheetPresented = false
+            passwordFailure = nil
+            await loadPage(pageIndex)
+            await newStore.anchorDidChange(to: pageIndex)
+        } catch let error as ArchiveError {
+            Breadcrumbs.shared.record(.passphraseAttempt(success: false))
+            passwordFailure = Self.passwordFailure(for: error)
+        } catch {
+            Breadcrumbs.shared.record(.passphraseAttempt(success: false))
+            passwordFailure = Self.passwordFailure(for: .wrongPassphrase)
+        }
+    }
+
+    /// 密码不通过时给用户看的那一句(全屏视图与解锁面板共用)。
+    /// 文案 key 归 VM 产出、渲染归 View —— 与其余 Failure 同一套约定
+    private static func passwordFailure(for error: ArchiveError) -> Failure {
+        switch error {
+        case .encryptedUnsupportedFormat, .headerEncrypted:
+            // 库层面解不开:如实说明,别让用户继续对着密码框试
+            return Failure(titleKey: "archive.password.unsupported.title",
+                           bodyKey: "archive.password.unsupported.body", bodyArg: nil)
+        default:
+            return Failure(titleKey: "archive.password.wrong.title",
+                           bodyKey: "archive.password.wrong.body", bodyArg: nil)
         }
     }
 
@@ -388,6 +545,7 @@ final class ReaderViewModel: ObservableObject {
         case .noImages:                 return "noImages"
         case .headerEncrypted:          return "headerEncrypted"
         case .encrypted:                return "encrypted"
+        case .wrongPassphrase:          return "wrongPassphrase"
         case .encryptedUnsupportedFormat: return "encryptedUnsupported"
         case .unknown:                  return "unknown"
         }
@@ -509,6 +667,11 @@ final class ReaderViewModel: ObservableObject {
         case .encrypted:
             return Failure(titleKey: "archive.encrypted.title",
                            bodyKey: "archive.encrypted.zip.body", bodyArg: nil)
+        case .wrongPassphrase:
+            // 正常流程到不了这里:`.encrypted` / `.wrongPassphrase` 在 performOpen
+            // 里已被分流到 .needsPassword(它们不是失败)。留这条只为 switch 穷尽,
+            // 万一将来有人改了分流,也不会掉进"无文案可显示"的空洞
+            return Self.passwordFailure(for: .wrongPassphrase)
         case .encryptedUnsupportedFormat:
             let isRar = ["cbr", "rar"].contains(url.pathExtension.lowercased())
             return Failure(titleKey: isRar ? "archive.encrypted.rar.title" : "archive.encrypted.7z.title",
@@ -520,7 +683,10 @@ final class ReaderViewModel: ObservableObject {
     /// 页级失败分流(部分加密包里的加密页 → 占位卡片;其余 → 单页读取失败)
     private func pageFailure(for error: ArchiveError) -> Failure {
         switch error {
-        case .encrypted, .encryptedUnsupportedFormat:
+        case .encrypted, .encryptedUnsupportedFormat, .wrongPassphrase:
+            // wrongPassphrase 与 encrypted 同路:都是「这一页没解开」。
+            // 密码不对在 open 阶段就被拦下了,走到这里只可能是
+            // 「部分加密包没输密码」(占位卡片的常规场景)
             let readable = max(pageCount - encryptedPageCount, 0)
             return Failure(titleKey: "archive.page.encrypted.title",
                            bodyKey: "archive.page.encrypted.subtitle", bodyArg: readable)

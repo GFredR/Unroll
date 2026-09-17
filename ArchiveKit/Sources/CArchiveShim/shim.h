@@ -68,8 +68,28 @@ const char *archive_version_string(void);
 
 /* 格式名(如 "Zip" / "7-Zip" / "RAR5"):首次 next_header 成功后有效。
  * 加密四态中「全部加密」按格式分文案(§5.9.3 图 10 FMT 分支):
- * zip → 理论可解但 v1 无密码框;7z/rar → 库层面不支持。 */
+ * zip → 可解(需密码);7z → 库层面不支持(实测,给密码也没用)。 */
 const char *archive_format_name(struct archive *);
+
+/* ---- 解压密码(v2,2026-09-17) --------------------------------------------
+ * ⚠️ 必须在 archive_read_open_filename **之前**调用 —— libarchive 在 open 时
+ *    初始化各格式的解密上下文,open 之后再设就来不及了。
+ * 返回 ARCHIVE_OK(0) / ARCHIVE_FAILED(-25) / ARCHIVE_FATAL(-30)。
+ *
+ * 实测边界(macOS 15.x / libarchive 3.7.4,样本见 Tests/Fixtures):
+ *   · ZIP + ZipCrypto(传统加密)  可解 ✓
+ *   · ZIP + AES-256(WinZip AES)  可解 ✓
+ *   · 7z  内容加密 / 头部加密     不可解 ✗ —— 报 "currently not supported",
+ *     即便密码正确也一样(这是库的能力边界,不是密码问题)
+ *   · 密码错 → read 时报 -25 且错误串为 "Incorrect passphrase"
+ *     未提供  → read 时报 -25 且错误串为 "Passphrase required for this entry"
+ *     (两者**可区分**,故 UI 能精确说「密码不对」而不是笼统的「打开失败」)
+ *   · 明文归档上调用本函数无害:密码被忽略,正常打开(有单测锁死)
+ *
+ * ⚠️ 隐私:passphrase 是敏感数据。调用方只可把它留在内存里传进来,
+ *    绝不可写进面包屑 / 日志 / 崩溃报告 / 持久化存储(§5.10.4 同一条红线)。
+ */
+int archive_read_add_passphrase(struct archive *, const char *passphrase);
 
 #ifdef __cplusplus
 }

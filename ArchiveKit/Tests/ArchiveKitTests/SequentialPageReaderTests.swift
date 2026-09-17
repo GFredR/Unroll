@@ -87,7 +87,7 @@ final class SequentialPageReaderTests: XCTestCase {
     // MARK: - 加密页(前置拦截不破坏扫描器)
 
     /// partial.cbz:page1/2 明文 + page3/4 ZipCrypto。
-    /// 加密页抛 .encrypted(v1 无密码框);随后明文页(含后向重建)照常可读 ——
+    /// 加密页抛 .encrypted(未给密码);随后明文页(含后向重建)照常可读 ——
     /// 证明加密失败没有把扫描器/流位置弄坏
     func testEncryptedPageThrowsAndReaderSurvives() throws {
         let doc = try ArchiveDocument.open(url: Fixtures.url("partial.cbz"))
@@ -115,8 +115,51 @@ final class SequentialPageReaderTests: XCTestCase {
     // 注:7z 加密页在扫描器层不可达 —— 现有 7z fixture(encrypted-content.cb7)
     // 是**全部加密**,open 阶段即抛终局态 .encryptedUnsupportedFormat,
     // 轮不到 SequentialPageReader 读页(该行为已由 ArchiveDocumentTests 覆盖)。
-    // 扫描器层的加密页分流由 partial.cbz(zip)用例验证:同一 encryptionError
-    // 分流函数,zip 分支对了,.sevenZip/.rar 分支是同一个函数的不同输入。
+    // 扫描器层的加密页分流由 partial.cbz(zip)用例验证:走的是同一个 encryptionError
+    // 分流函数,zip 分支对了,.sevenZip 分支只是同函数换个输入。
+    // (RAR 自 2026-09-17 起与 zip 同支 —— 两者都给密码入口,理由见 encryptionError)
+
+    // MARK: - 加密包 + 密码(v2,2026-09-17)
+
+    /// 加密包 + 密码:顺序扫描器**在重开分支上也必须带密码**。
+    ///
+    /// 本测试专盯一个极易漏掉的点:`reopen()` 是独立于 `ArchiveDocument.open`
+    /// 的一次句柄新建,密码只能靠 `document.passphrase` 传下去。漏传的表现极其
+    /// 隐蔽 —— 从封面往后翻一路正常(同一个句柄顺着走),**一旦往回翻就要密码**,
+    /// 用户会以为「这软件翻回去就坏」。所以前向与后向必须都断言
+    func testEncryptedArchiveWithPassphraseSurvivesBackwardReopen() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("encrypted-zip.cbz"),
+                                           passphrase: "secret")
+        let reader = SequentialPageReader(document: doc)
+
+        // 前向 0 → 1 → 2:同一句柄走完,不解密码也能「看起来正常」
+        XCTAssertEqual(try reader.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try reader.data(at: 1), try Fixtures.srcData("page2.png"))
+        XCTAssertEqual(try reader.data(at: 2), try Fixtures.srcData("page10.png"))
+
+        // 后向 2 → 0:触发 reopen —— 密码漏传的话这里会抛 .encrypted
+        XCTAssertEqual(try reader.data(at: 0), try Fixtures.srcData("page1.png"))
+
+        // close 之后再读同样走 reopen
+        reader.close()
+        XCTAssertEqual(try reader.data(at: 2), try Fixtures.srcData("page10.png"))
+    }
+
+    /// 部分加密包 + 密码:原先被前置拦截的加密页现在读得出,4 页全通;
+    /// 后向重建后依然全通(重开时密码没丢)
+    func testPartialArchiveWithPassphraseReadsEveryPage() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("partial.cbz"),
+                                           passphrase: "secret")
+        let reader = SequentialPageReader(document: doc)
+
+        for index in doc.entries.indices {
+            XCTAssertEqual(try reader.data(at: index),
+                           try Fixtures.srcData(doc.entries[index].path),
+                           "第 \(index) 页")
+        }
+        XCTAssertEqual(try reader.data(at: 0), try Fixtures.srcData("page1.png"),
+                       "后向重建后仍可读")
+    }
 
     // MARK: - 越界与生命周期
 

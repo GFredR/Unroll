@@ -69,6 +69,18 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
     }
 
+    /// 部分加密包的解锁入口(⇧⌘K,2026-09-17)。
+    /// 取「Key」的联想键:⇧⌘L / ⇧⌘R 已被左右开方向占用,⇧⌘F 给了「在访达中显示」。
+    /// 它平时是 disabled 的(只有真存在加密页时才可用),但 keyEquivalent
+    /// 与 disabled 无关 —— 断言的正是「这一项被正确注册进了菜单」
+    func testFileMenuCarriesUnlockWithShiftCommandK() throws {
+        _ = try requireMenu()
+        let title = L10n.tr("app.menu.unlock")
+        let item = try XCTUnwrap(menuItem(titled: title), "菜单里找不到「\(title)」")
+        XCTAssertEqual(item.keyEquivalent, "k")
+        XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
+    }
+
     // MARK: - 既有命令不许在重构里掉队
 
     /// M3 验收标准「纯键盘可完成全部操作」的可执行版本:逐个点名常用命令
@@ -82,7 +94,7 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.addBookmark", "app.menu.previousBookmark", "app.menu.nextBookmark",
-            "app.menu.saveCurrentPage", "app.menu.revealInFinder",
+            "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
         ]
         for key in expected {
             let title = L10n.tr(key)
@@ -100,7 +112,7 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.nextBookmark", "app.menu.previousBookmark",
-            "app.menu.saveCurrentPage", "app.menu.revealInFinder",
+            "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
         ]
         for key in keys {
             let title = L10n.tr(key)

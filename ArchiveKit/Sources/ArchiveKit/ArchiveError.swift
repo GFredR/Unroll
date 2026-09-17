@@ -9,13 +9,19 @@
 public enum ArchiveError: Error, Sendable, Equatable {
     /// 文件损坏 / 不是支持的归档格式
     case corrupted
-    /// 全部条目加密(zip:理论上可解但 v1 未做密码框 → §7.3-A)
+    /// 全部图片加密,**且尚未提供密码**(zip / rar)。
+    /// v2(2026-09-17)起这不是终局错误:UI 收到它就弹密码输入,
+    /// 用户输对即进入阅读(v1 时无密码框,它是终局态)。
     case encrypted
-    /// 加密但本版本读不了。证据强度按格式**不同**,勿一概而论:
-    ///   · 7z  —— **实测确认** libarchive 不支持解密(报错 `currently not supported`)
-    ///   · RAR —— **未实测**,属保守推断;第三方证据倾向"RAR5 实际可解"(§5.8)
-    /// 二者当前共用本 case(v1 均无密码框,UI 结果一致),但**文案措辞必须区分**:
-    /// 7z 可说「系统库不支持」,RAR 只能说「当前版本暂不支持」。
+    /// 提供了密码但**不对**:libarchive 报 "Incorrect passphrase"(实测)。
+    /// 与 `.encrypted` 分开是为了 UI 能说准话 —— 「密码不对,再试一次」
+    /// 和「这个文件需要密码」是两件事,合并会让用户不知该做什么。
+    case wrongPassphrase
+    /// 加密但本版本读不了。两个来源,措辞必须区分:
+    ///   · **7z** —— 实测确认库不支持(`currently not supported`),故**不给密码入口**;
+    ///   · **RAR** —— v2 给密码入口,但若库确实解不了,会经 passphraseFailure
+    ///     落到这里 → 用户看到「这个归档解不开」(而不是对着密码框一直试)。
+    ///     证据强度与 7z 完全不同,见 `encryptionError(for:)` 的说明。
     case encryptedUnsupportedFormat
     /// 头部加密:连文件名列表都拿不到(四态之一)
     case headerEncrypted

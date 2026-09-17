@@ -94,6 +94,15 @@ struct UnrollApp: App {
                 }
                 .keyboardShortcut("f", modifiers: [.command, .shift])
                 .disabled(reader.documentURL == nil)
+
+                // 部分加密包:输一次密码,把读不出的页一起解开(v2,2026-09-17)。
+                // 全加密包不走这里 —— 它在打开阶段就直接弹密码视图了。
+                // ⇧⌘K 取「Key」的联想键(⇧⌘L / ⇧⌘R 已被左右开方向占用)
+                Button(L10n.tr("app.menu.unlock")) {
+                    reader.beginUnlock()
+                }
+                .keyboardShortcut("k", modifiers: [.command, .shift])
+                .disabled(!reader.hasLockedPages)
             }
 
             CommandMenu(L10n.tr("app.menu.openRecent")) {

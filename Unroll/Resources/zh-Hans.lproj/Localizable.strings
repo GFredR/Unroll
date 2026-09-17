@@ -16,17 +16,17 @@
 
 /* ---- 归档级错误(§5.9.3.1 八组,M3 做最终润色) ---- */
 
-/* #1 ZIP 全部加密 */
+/* #1 ZIP 全部加密 —— v2 起会弹密码输入框,这条只剩防御分支兜底(见 openFailure) */
 "archive.encrypted.title" = "此归档已加密";
-"archive.encrypted.zip.body" = "这个压缩包里的文件都需要密码才能读取。\n当前版本暂不支持输入密码。";
+"archive.encrypted.zip.body" = "这个压缩包里的文件需要密码才能读取。";
 
-/* #2 7z 内容加密(实测:系统库不支持,如实说) */
+/* #2 7z 内容加密(实测:系统库不支持,给对密码也一样 —— 必须如实说) */
 "archive.encrypted.7z.title" = "无法读取加密的 7z 内容";
 "archive.encrypted.7z.body" = "系统自带的解压库不支持解密 7z 内容,即使有正确密码也读不出来。\n请改用未加密的压缩包,或先用其他工具解压。";
 
-/* #3 RAR 内容加密(⚠️ 未实测,暂按「系统库不支持」撰写,§5.8) */
+/* #3 RAR 内容加密(⚠️ 仍无样本、未实测;措辞必须**弱于** 7z —— 见设计文档 §5.8) */
 "archive.encrypted.rar.title" = "无法读取加密的 RAR 内容";
-"archive.encrypted.rar.body" = "系统自带的解压库不支持解密 RAR 内容。\n请改用未加密的压缩包,或先用其他工具解压。";
+"archive.encrypted.rar.body" = "系统自带的解压库可能不支持这个 RAR 的加密方式。\n可以试试其他压缩包,或先用其他工具解压。";
 
 /* #4 头部加密 */
 "archive.encrypted.header.title" = "无法读取这个归档";
@@ -34,7 +34,22 @@
 
 /* #5 部分加密 · 页级占位卡片 */
 "archive.page.encrypted.title" = "此页已加密";
-"archive.page.encrypted.subtitle" = "其余 %ld 页可正常阅读";
+"archive.page.encrypted.subtitle" = "其余 %ld 页可正常阅读;输入解压密码可一并解开";
+
+/* #6 解压密码输入(v2,2026-09-17) */
+"archive.password.title" = "这个文件需要密码";
+"archive.password.body" = "输入解压密码后即可查看内容。";
+"archive.password.unlock.title" = "解锁加密页";
+"archive.password.unlock.body" = "输入密码后,原本读不出的页面会一起解开。";
+"archive.password.placeholder" = "解压密码";
+"archive.password.submit" = "解锁";
+"archive.password.cancel" = "取消";
+"archive.password.reveal" = "显示密码";
+"archive.password.hide" = "隐藏密码";
+"archive.password.wrong.title" = "密码不对";
+"archive.password.wrong.body" = "再试一次。密码区分大小写,留意输入法与首尾空格。";
+"archive.password.unsupported.title" = "这个归档解不开";
+"archive.password.unsupported.body" = "系统自带的解压库不支持这个归档的加密方式,换密码也读不出来。";
 
 /* #6 损坏 / 非归档 */
 "archive.corrupted.title" = "无法打开这个文件";
@@ -123,9 +138,10 @@
 /* 窗口标题:文件名 · 页码(多窗口 / Dock 悬停辨认用) */
 "reader.window.title" = "%@ · P.%ld/%ld";
 
-/* 文件菜单:另存当前页(⌘S)/ 在访达中显示(⇧⌘F) */
+/* 文件菜单:另存当前页(⌘S)/ 在访达中显示(⇧⌘F)/ 输入解压密码(⇧⌘K) */
 "app.menu.saveCurrentPage" = "另存当前页…";
 "app.menu.revealInFinder" = "在访达中显示";
+"app.menu.unlock" = "输入解压密码…";
 
 /* 写盘失败(刻意不带系统错误原文 —— 那串文字可能含完整路径) */
 "app.alert.saveFailed.title" = "保存失败";

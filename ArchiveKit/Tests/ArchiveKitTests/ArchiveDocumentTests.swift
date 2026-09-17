@@ -205,6 +205,133 @@ final class ArchiveDocumentTests: XCTestCase {
         }
     }
 
+    // MARK: - open:解压密码(v2,2026-09-17)
+
+    /// fixture 内所有加密样本共用这一个密码(造法见 make_fixtures.sh:
+    /// `zip -P secret` / pyzipper `setpassword(b'secret')` / py7zr `password='secret'`)
+    private static let fixturePassphrase = "secret"
+
+    /// ZipCrypto 全加密 + 对密码 → 打开成功且**读得出正确字节**。
+    /// 这是整个密码功能的根断言:不只是「没报错」,而是解出来的字节与源图
+    /// 逐字节一致 —— 否则可能只是碰巧没触发错误
+    func testOpenEncryptedZipWithPassphraseReadsExactBytes() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("encrypted-zip.cbz"),
+                                           passphrase: Self.fixturePassphrase)
+        XCTAssertEqual(doc.entries.map(\.path), ["page1.png", "page2.png", "page10.png"])
+        XCTAssertEqual(doc.format, .zip)
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try doc.data(at: 1), try Fixtures.srcData("page2.png"))
+        XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page10.png"))
+    }
+
+    /// AES-256 加密 + 对密码同样可解。
+    /// 两条加密路线(ZipCrypto 靠 CRC 校验字节 / AES 靠 password verification
+    /// 值 + HMAC)在 libarchive 里是**两套代码**,一条通了不能推断另一条
+    func testOpenEncryptedAesZipWithPassphraseReadsExactBytes() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("encrypted-zip-aes.cbz"),
+                                           passphrase: Self.fixturePassphrase)
+        XCTAssertEqual(doc.format, .zip)
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page10.png"))
+    }
+
+    /// 密码解开后 protection 归 .none(「现在读得出来吗」),
+    /// 而 encryptedImageCount 仍如实报告 3 页原是加密的(「原本加密了多少页」)。
+    /// 两个字段正交,UI 前者决定占位卡片、后者决定要不要显示「已解锁」提示
+    func testUnlockedDocumentReportsNoneProtectionButKeepsEncryptedCount() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("encrypted-zip.cbz"),
+                                           passphrase: Self.fixturePassphrase)
+        XCTAssertEqual(doc.protection, .none)
+        XCTAssertEqual(doc.encryptedImageCount, 3)
+        XCTAssertEqual(doc.passphrase, Self.fixturePassphrase)
+    }
+
+    /// 未给密码时 encryptedImageCount 也如实计数(UI 据此判断「这包要密码」)
+    func testEncryptedCountIsReportedFromPendingDocument() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("partial.cbz"))
+        XCTAssertEqual(doc.encryptedImageCount, 2)
+        XCTAssertNil(doc.passphrase)
+    }
+
+    /// 全加密 zip + **不给密码** → .encrypted(UI 收到它弹密码框)。
+    /// 与上面「密码错抛 .wrongPassphrase」是不同分支,必须分别锁死 ——
+    /// 合并成一个的话,UI 就分不清「第一次要密码」和「上次输错了」
+    func testOpenEncryptedZipWithoutPassphraseThrowsEncrypted() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("encrypted-zip.cbz"))) { error in
+            XCTAssertEqual(error as? ArchiveError, .encrypted)
+        }
+    }
+
+    /// 密码错 → `.wrongPassphrase`(**不是** .encrypted,也不是 .corrupted)。
+    /// libarchive 对两种加密都报 "Incorrect passphrase",分流靠错误串匹配
+    /// (见 passphraseFailure)。若哪天库换了措辞,这里会退化成 .corrupted
+    /// 而被本测试抓住,不会静默变成「密码错却说文件损坏」
+    func testWrongPassphraseOnZipCryptoIsDistinguished() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("encrypted-zip.cbz"),
+                                                      passphrase: "wrong-password")) { error in
+            XCTAssertEqual(error as? ArchiveError, .wrongPassphrase)
+        }
+    }
+
+    func testWrongPassphraseOnAesZipIsDistinguished() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("encrypted-zip-aes.cbz"),
+                                                      passphrase: "wrong-password")) { error in
+            XCTAssertEqual(error as? ArchiveError, .wrongPassphrase)
+        }
+    }
+
+    /// 部分加密包 + 对密码 → 原本读不出的加密页现在也读得出,4 页全通。
+    /// 场景:汉化组「前几页试看、后面加密」的包,输一次密码整本就完整了
+    func testPartialArchiveWithPassphraseReadsAllPages() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("partial.cbz"),
+                                           passphrase: Self.fixturePassphrase)
+        XCTAssertEqual(doc.entries.count, 4)
+        XCTAssertEqual(doc.protection, .none, "解密后不再有「读不出的页」")
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try doc.data(at: 1), try Fixtures.srcData("page2.png"))
+        XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page3.png"))
+        XCTAssertEqual(try doc.data(at: 3), try Fixtures.srcData("page4.png"))
+    }
+
+    /// 部分加密包 + 错密码 → 也要报 .wrongPassphrase,而不是「打开成功但一半页失败」。
+    /// 这是刻意的取舍:用户在**输入那一刻**就该知道密码不对,而不是读到第 3 页才发现
+    func testPartialArchiveWithWrongPassphraseIsRejectedUpfront() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("partial.cbz"),
+                                                      passphrase: "wrong-password")) { error in
+            XCTAssertEqual(error as? ArchiveError, .wrongPassphrase)
+        }
+    }
+
+    /// **明文归档上带密码必须无害**:密码被库忽略,照常打开、照常读到字节。
+    /// 反例(不许发生):「传了个多余的密码 → 打不开」—— 调用方无法预知归档
+    /// 是否加密,若带密码有副作用,「先输密码再打开」的流程就会毁掉明文包
+    func testPlainArchiveIgnoresPassphrase() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("plain.cbz"),
+                                           passphrase: "whatever")
+        XCTAssertEqual(doc.entries.map(\.path), ["page1.png", "page2.png", "page10.png"])
+        XCTAssertEqual(doc.protection, .none)
+        XCTAssertEqual(doc.encryptedImageCount, 0)
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+    }
+
+    /// 7z 内容加密:**给对密码也不行** —— 库层面就不支持解密
+    /// (报 "The file content is encrypted, but currently not supported")。
+    /// 本测试是「7z 不给密码入口」这个 UI 决策的依据:让用户白输一次密码是欺骗
+    func testEncrypted7zStaysUnsupportedEvenWithCorrectPassphrase() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("encrypted-content.cb7"),
+                                                      passphrase: Self.fixturePassphrase)) { error in
+            XCTAssertEqual(error as? ArchiveError, .encryptedUnsupportedFormat)
+        }
+    }
+
+    /// 7z 头部加密 + 密码:同样无解(头部解密在列目录阶段就失败了)
+    func testHeaderEncrypted7zStaysHeaderEncryptedWithPassphrase() {
+        XCTAssertThrowsError(try ArchiveDocument.open(url: Fixtures.url("encrypted-header.cb7"),
+                                                      passphrase: Self.fixturePassphrase)) { error in
+            XCTAssertEqual(error as? ArchiveError, .headerEncrypted)
+        }
+    }
+
     // MARK: - 图片条目判定(isListedImage 规则单测)
 
     /// __MACOSX/ 场景无法用 fixture 端到端复现(实测:合法 AppleDouble 被

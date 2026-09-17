@@ -28,6 +28,16 @@ struct ReaderView: View {
                 EmptyStateView(onOpen: { viewModel.open(url: $0) })
             case .opening:
                 OpeningView()
+            case .needsPassword:
+                // 画布恒为黑(`Palette.canvas`),所以这里锁定深色语义 ——
+                // 否则浅色系统外观下 primary/secondary 会解析成深色文字,黑底上
+                // 直接看不见(阅读器是暗色场景,这一处必须显式声明)
+                PasswordPromptView(
+                    context: .opening,
+                    failure: viewModel.passwordFailure,
+                    onSubmit: { viewModel.submitPassword($0) },
+                    onCancel: { viewModel.cancelPasswordPrompt() })
+                    .environment(\.colorScheme, .dark)
             case .failed(let failure):
                 FailureView(failure: failure, onOpen: { viewModel.open(url: $0) })
             case .reading:
@@ -47,6 +57,16 @@ struct ReaderView: View {
         // 页码跳转(⌥⌘G):菜单命令只置位 VM 的开关,面板自身归 View(命令不持 View 状态)
         .sheet(isPresented: $viewModel.isJumpSheetPresented) {
             PageJumpSheet(viewModel: viewModel)
+        }
+        // 阅读中解锁部分加密包(「文件 → 输入解压密码…」触发)。
+        // 刻意不加 `.environment(\.colorScheme, .dark)`:面板有自己的系统背景,
+        // 跟随系统外观才对(全屏那个是黑底,情形不同)
+        .sheet(isPresented: $viewModel.isUnlockSheetPresented) {
+            PasswordPromptView(
+                context: .unlocking,
+                failure: viewModel.passwordFailure,
+                onSubmit: { viewModel.submitUnlockPassword($0) },
+                onCancel: { viewModel.cancelPasswordPrompt() })
         }
     }
 }
@@ -322,6 +342,13 @@ private struct ReaderCanvas: View {
                 Text(failure.bodyArg.map { L10n.tr(bodyKey, $0) } ?? L10n.tr(bodyKey))
                     .font(.system(size: DesignSystem.Typography.footnote))
                     .foregroundStyle(.secondary)
+            }
+            // 加密页顺手给一条出路:否则用户看到「此页已加密」也不知道去哪输密码
+            // (菜单里那一项不够显眼)。只在真有未解锁页时出现
+            if viewModel.hasLockedPages {
+                Button(L10n.tr("app.menu.unlock")) { viewModel.beginUnlock() }
+                    .buttonStyle(.borderless)
+                    .padding(.top, DesignSystem.Spacing.xs)
             }
         }
         .padding(DesignSystem.Spacing.lg)

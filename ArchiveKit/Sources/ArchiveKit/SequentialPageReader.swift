@@ -11,6 +11,9 @@
 //     与「大跨度跳页才重建实例」的设计一致 —— 后向跳页天然属于重建分支);
 //   · 加密页前置拦截(与 data(at:) 同款分流),不消耗流位置 —— 失败后仍可
 //     继续读其他页(§5.9.4 约束 4「单页失败 ≠ 整档失败」)。
+//     v2(2026-09-17):拦截判据是「加密 **且** 没带密码」。带对了密码的包
+//     不拦(加密标志在解锁后仍为 true,见 ArchiveDocument 文件头实测①),
+//     否则用户输对密码后每页都被误拦 —— 那是最容易被误当「密码没用」的故障。
 //
 // 线程约束(写死):struct archive 非线程安全,本类**必须被单一 actor/Task 独占**。
 // M2 由 App 层 PageStore actor 持有 —— 非 Sendable 设计是故意的:
@@ -60,8 +63,9 @@ public final class SequentialPageReader {
             throw ArchiveError.unknown(code: 0,
                 message: "page index \(index) out of range 0..\(document.entries.count)")
         }
-        // 加密页前置拦截:不消耗流位置,失败后其他页照常可读
-        if document.entryEncrypted[index] {
+        // 加密页前置拦截:不消耗流位置,失败后其他页照常可读。
+        // 带密码时不拦 —— 那些页现在读得出来,该由真读决定成败
+        if document.entryEncrypted[index], document.passphrase == nil {
             throw ArchiveDocument.encryptionError(for: document.format)
         }
 
@@ -112,13 +116,20 @@ public final class SequentialPageReader {
     }
 
     /// 重开实例:close 旧的 → openRawHandle(与 open/data(at:) 共用同一套
-    /// filter/format 注册逻辑,含 §3.2 的 rar/7zip 显式注册与 WARN 容忍)
+    /// filter/format 注册逻辑,含 §3.2 的 rar/7zip 显式注册与 WARN 容忍)。
+    /// **密码必须一起带上**。漏传的症状(2026-09-17 注入验证):第一页正常、
+    /// 之后每页失败 —— reopen 出来的句柄没有密码,读到加密数据返回 -25。
+    /// 分流层已能把这种情形翻译成密码类错误(见 `readCurrentEntryData`),
+    /// 但**同一本书前后页行为不一致**这一点依旧:前向顺着同一个句柄走没事,
+    /// 只有后向跳页(触发重建)才坏。「翻回去就坏」这类故障查起来很费时间,
+    /// 所以这句提醒不能删
     private func reopen() throws {
         if let h = handle {
             ArchiveDocument.dispose(h)
             handle = nil
         }
-        handle = try ArchiveDocument.openRawHandle(url: document.url)
+        handle = try ArchiveDocument.openRawHandle(url: document.url,
+                                                   passphrase: document.passphrase)
         consumedRaw = -1
     }
 }

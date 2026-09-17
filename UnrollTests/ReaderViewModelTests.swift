@@ -539,4 +539,204 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(vm.exportFileName(format: .png), "plain-p001.png")
         XCTAssertEqual(vm.exportFileName(format: .jpeg), "plain-p001.jpg")
     }
+
+    // MARK: - 解压密码(v2,2026-09-17)
+
+    /// fixture 里所有加密样本共用这一个密码(造法见 ArchiveKit/Tests/Fixtures/make_fixtures.sh)
+    private static let fixturePassphrase = "secret"
+
+    /// 取加密 fixture;不可达则 skip(与 openFixtureOrSkip 同一套沙盒约定)
+    private func encryptedFixture(_ name: String) throws -> URL {
+        let url = Self.fixturesDir.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        return url
+    }
+
+    /// 等一个异步状态落定。解锁走的是 Task(不是可 await 的 open),
+    /// 只能轮询 —— 20ms 粒度,与 waitForSecondary 同一套写法
+    private func waitUntil(_ condition: () -> Bool, timeout: TimeInterval = 3) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition(), Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    /// 全加密 zip + 不给密码 → **进入 needsPassword,而不是失败**。
+    /// 这是 v2 密码功能的入口断言:v1 时同一个文件走的是一条终局错误页
+    func testEncryptedArchiveAsksForPasswordInsteadOfFailing() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+
+        XCTAssertEqual(vm.phase, .needsPassword)
+        XCTAssertNil(vm.passwordFailure, "第一次问密码,不该先摆一句「密码不对」")
+        XCTAssertEqual(vm.pageCount, 0)
+    }
+
+    /// 输对密码 → 进阅读态,首页真的解出来上屏。
+    /// 只断言「没报错」是不够的:密码错与密码对都可能走到 reading,
+    /// 真正说明问题的是**图出来了**(之前那张是加密占位卡)
+    func testCorrectPasswordOpensArchive() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        XCTAssertEqual(vm.phase, .needsPassword)
+
+        await vm.open(url: url, passphrase: Self.fixturePassphrase).value
+
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertEqual(vm.pageCount, 3)
+        XCTAssertNil(vm.passwordFailure)
+        XCTAssertFalse(vm.hasLockedPages)
+        let image = try XCTUnwrap(vm.presentation.image, "解开密码后首页应当真的上屏")
+        XCTAssertGreaterThan(image.width, 0)
+    }
+
+    /// AES-256 加密包同样走通。ZipCrypto 与 AES 在 libarchive 里是两套解密
+    /// 代码(ZipCrypto 靠末尾校验字节、AES 靠口令校验值 + HMAC),
+    /// 一条通过不能推断另一条 —— 故两种样本各测一遍
+    func testCorrectPasswordOpensAesArchive() async throws {
+        let url = try encryptedFixture("encrypted-zip-aes.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url, passphrase: Self.fixturePassphrase).value
+
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertEqual(vm.pageCount, 3)
+    }
+
+    /// 密码错 → **留在密码界面**并说明原因:不是终局失败,也不许进阅读器
+    /// (进了就是满屏占位卡片,用户不知道自己做错了什么)
+    func testWrongPasswordStaysOnPromptWithExplanation() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url, passphrase: "definitely-not-the-password").value
+
+        XCTAssertEqual(vm.phase, .needsPassword)
+        XCTAssertEqual(vm.passwordFailure?.titleKey, "archive.password.wrong.title")
+        XCTAssertEqual(vm.passwordFailure?.bodyKey, "archive.password.wrong.body")
+        XCTAssertEqual(vm.pageCount, 0, "密码没对就不该有页进内存")
+    }
+
+    /// 输错之后再输对 → 正常进入。重试路径必须通,否则面板成了死胡同
+    func testRetryAfterWrongPasswordSucceeds() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url, passphrase: "nope").value
+        XCTAssertNotNil(vm.passwordFailure)
+
+        await vm.open(url: url, passphrase: Self.fixturePassphrase).value
+
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertNil(vm.passwordFailure, "成功之后旧的「密码不对」必须清掉")
+    }
+
+    /// 取消 → 回空态,并清掉 documentURL。
+    /// (留着它会让「在访达中显示」指向一个**从未真正打开**的归档 ——
+    ///  菜单可用但点了没意义,是很隐蔽的假状态)
+    func testCancellingPasswordReturnsToEmptyState() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        XCTAssertEqual(vm.phase, .needsPassword)
+
+        vm.cancelPasswordPrompt()
+
+        XCTAssertEqual(vm.phase, .noDocument)
+        XCTAssertNil(vm.documentURL)
+        XCTAssertNil(vm.documentName)
+        XCTAssertNil(vm.passwordFailure)
+    }
+
+    /// 空密码被忽略:不发起打开、不改状态(UI 已禁用按钮,这层是兜底)
+    func testEmptyPasswordIsIgnored() async throws {
+        let url = try encryptedFixture("encrypted-zip.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        vm.submitPassword("")
+
+        XCTAssertEqual(vm.phase, .needsPassword)
+        XCTAssertNil(vm.passwordFailure)
+    }
+
+    /// 7z 加密**不给密码入口**,仍是终局失败。
+    /// 依据:系统库对 7z 加密是能力死限(给了正确密码也报 currently not supported,
+    /// 2026-09-17 实测),让用户白输一次密码是欺骗
+    func testEncrypted7zFailsWithoutPasswordPrompt() async throws {
+        let url = try encryptedFixture("encrypted-content.cb7")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+
+        guard case .failed(let failure) = vm.phase else {
+            return XCTFail("7z 加密应仍是终局失败,实际 \(vm.phase)")
+        }
+        XCTAssertEqual(failure.titleKey, "archive.encrypted.7z.title")
+    }
+
+    // MARK: - 部分加密包的解锁(⇧⌘K)
+
+    /// 部分加密包照常打开(加密页显示占位卡片),此时解锁入口才可用
+    func testPartialArchiveOpensWithLockedPages() async throws {
+        let url = try encryptedFixture("partial.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertEqual(vm.pageCount, 4)
+        XCTAssertTrue(vm.hasLockedPages, "有读不出的页时,解锁入口必须可用")
+    }
+
+    /// 解锁成功:全部页可读,且**页码不动** —— 解锁不是换书,不该把读者弹回封面
+    func testUnlockPartialArchiveKeepsPosition() async throws {
+        let url = try encryptedFixture("partial.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        vm.goTo(1)
+        let positionBeforeUnlock = vm.pageIndex
+
+        vm.beginUnlock()
+        XCTAssertTrue(vm.isUnlockSheetPresented)
+        vm.submitUnlockPassword(Self.fixturePassphrase)
+        try await waitUntil { !vm.hasLockedPages }
+
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertEqual(vm.pageIndex, positionBeforeUnlock, "解锁不该变动阅读位置")
+        XCTAssertEqual(vm.pageCount, 4, "解密不改条目数")
+        XCTAssertFalse(vm.isUnlockSheetPresented)
+        XCTAssertNil(vm.passwordFailure)
+    }
+
+    /// 解锁失败:读数**留在原地**、面板留着让人重试。
+    /// 这条专门盯「解锁不许走 open()」—— 那条路是换书语义,一上来就 teardown
+    /// 旧 store 并清空页码,于是密码打错一次就白屏一次、读者被弹回封面
+    func testUnlockWithWrongPasswordKeepsReadingIntact() async throws {
+        let url = try encryptedFixture("partial.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        guard case .reading = vm.phase else { throw XCTSkip("partial.cbz 未进入 reading") }
+
+        vm.beginUnlock()
+        vm.submitUnlockPassword("definitely-not-the-password")
+        try await waitUntil { vm.passwordFailure != nil }
+
+        XCTAssertEqual(vm.phase, .reading, "解锁失败不许把读者踢出阅读态")
+        XCTAssertEqual(vm.pageCount, 4, "解锁失败不许把文档拆掉")
+        XCTAssertTrue(vm.isUnlockSheetPresented, "面板要留着让人重试")
+        XCTAssertTrue(vm.hasLockedPages, "没解开就还是有锁定页")
+    }
+
+    /// 解锁面板的取消只关面板,阅读照常
+    func testCancellingUnlockKeepsReading() async throws {
+        let url = try encryptedFixture("partial.cbz")
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        vm.beginUnlock()
+
+        vm.cancelPasswordPrompt()
+
+        XCTAssertFalse(vm.isUnlockSheetPresented)
+        XCTAssertEqual(vm.phase, .reading)
+        XCTAssertEqual(vm.pageCount, 4)
+    }
 }

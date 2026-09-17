@@ -33,7 +33,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Save the current page as an image** (`⌘S`) — writes it out as PNG or JPEG. In two-page mode you get **the whole spread as you see it** (side by side, in your reading direction), not one isolated page.
 - **A draggable progress bar** — the HUD bar scrubs: the page number follows your drag, and it only jumps when you let go (instead of decoding a page for every step).
 - **Page number in the window title** — the title bar reads "file name · P.3/200", so multiple windows and Dock hover tell you where you are. `⇧⌘F` reveals the current file in Finder when you want to move on to the next volume.
-- **Encrypted archives are handled honestly** — detected up front, reported clearly, never a crash. See below.
+- **Encrypted archives can be unlocked with a password** — an encrypted cbz / cbr opens straight into a password prompt, and the correct password gets you reading. For partially encrypted archives, `⇧⌘K` unlocks the locked pages mid-read. The password lives in memory only: never written to disk, never remembered, never in a report. Formats the system library genuinely cannot decrypt (encrypted 7z) get no prompt at all — they get an honest explanation. See below.
 - **Native SwiftUI, macOS 14+, sandboxed, and with no network permission at all.**
 
 ## Measured performance
@@ -58,23 +58,26 @@ The number worth reading twice is the one behind the sequential scanner. Reopeni
 | `.cbt` / `.tar` | TAR | ✅ verified with fixtures |
 | `.cbr` | RAR 5 | ✅ **verified against real-world samples** |
 | `.cbr` | RAR 4 (older archives) | ⚠️ untested — no sample on hand; `libarchive` supports RAR 4, so it should work, but it has not been confirmed |
-| any | encrypted | 🚫 detected and explained; **not** decrypted in v1 |
+| any | encrypted | ✅ detected; **ZIP (ZipCrypto / AES-256) and RAR can be unlocked with a password**; encrypted 7z can't be decrypted by the system library, and says so |
+| any | header-encrypted | ⚠️ even the file listing is encrypted, so nothing can be read — explained honestly, with a next step |
 
 When an archive holds no images, or the file is damaged or isn't an archive at all, you get a specific message rather than an empty window.
 
 ## Encrypted archives
 
-![An encrypted archive, reported honestly instead of failing silently](docs/shot-encrypted-en.png)
+![An encrypted archive, offered a password instead of failing silently](docs/shot-encrypted-en.png)
 
-There are three distinct cases, and they are reported differently because the underlying truth is different:
+An encrypted cbz (or any ZIP / RAR-based archive) opens straight into a password prompt. The right password starts reading immediately; a wrong one **keeps you right there and says why** (case-sensitive — watch the input method and stray spaces), so you just try again instead of being bounced back to an error page.
 
-- **Header-encrypted** — even the file listing is encrypted. The archive can't be opened at all, so you're told that directly.
-- **Fully encrypted** — the contents are encrypted. Unroll says so and points out that v1 has no password prompt.
-- **Partially encrypted** — some pages are locked. Those pages get an "encrypted" placeholder card while the remaining ones stay readable, so an archive with two locked pages is still worth opening.
+There are three distinct cases, and they are handled differently because the underlying truth is different:
 
-One case deserves an explicit warning: for **encrypted 7z**, the system `libarchive` cannot decrypt content *at all* — not even with the correct password. That is a limitation of the library macOS ships, not a policy choice by this app, and the message says so rather than asking you for a password that could never work. Encrypted ZIP and RAR go through the same honest path: detected, explained, not decrypted.
+- **Header-encrypted** — even the file listing is encrypted, so the archive can't be opened at all. That is stated directly and no prompt is offered, because a prompt would be pointless: until you know what's inside, there is nothing to decrypt.
+- **Fully encrypted** — the contents are encrypted and the system library *can* decrypt them (ZipCrypto and AES-256 ZIP both verified), so you get a password prompt.
+- **Partially encrypted** — only some pages are locked. Those pages get an "encrypted" placeholder card while the rest stay readable; one password via `⇧⌘K` (or the button on the card) unlocks them all **without moving where you are in the book**. An archive with two locked pages is still worth opening.
 
-**v1 has no password entry box.** If you need to read an encrypted archive, decrypt it with another tool first.
+One case deserves special mention: for **encrypted 7z**, the system `libarchive` cannot decrypt content *at all* — not even with the correct password. That is a limitation of the library macOS ships, not a policy choice by this app. So no password box is offered here on purpose: asking you for a password that cannot possibly work would disguise a library limitation as a problem with your input, which is worse than plainly saying it isn't supported. Encrypted RAR does get a prompt — but the wording is deliberately weaker than for 7z, because there is no RAR encryption sample on hand to test against, so the evidence isn't the same. If it really can't be opened, it lands on the same "this archive can't be unlocked" message.
+
+**About the password itself:** it exists in memory only, for the duration of that one reading session, and is gone when you quit. Unroll does **not** remember passwords (that would mean the Keychain, a separate decision of its own) and never writes one to disk or to a crash report — the report records only the two facts that a password was required and whether the attempt succeeded.
 
 ## Install
 
@@ -148,6 +151,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⌥⌘G` | Go to page… |
 | `⌘S` | Save the current page as an image (whole spread in two-page mode) |
 | `⇧⌘F` | Reveal the current file in Finder |
+| `⇧⌘K` | Enter the archive's password to unlock encrypted pages (available when the current archive has any) |
 | `⌘3` / `⌘4` / `⌘5` / `⌘6` | Fit window / fit width / fit height / actual size (1:1) |
 | `⌘D` | Add / remove a bookmark on the current page |
 | `⌥⌘↑` / `⌥⌘↓` | Previous / next bookmark (wraps at the ends) |
@@ -167,7 +171,7 @@ Crash reporting is **opt-in and manual**. If the app was killed or quit abnormal
 
 ## Known limitations
 
-- **No password entry** for encrypted archives (v1).
+- **Encrypted 7z cannot be read** — the system `libarchive` can't decrypt 7z, even with the correct password. So it offers no password box and says so instead. Separately: **encrypted RAR does get a prompt but is untested** (no RAR encryption sample on hand, and none can be produced on this machine); if it can't be opened, it reports "this archive can't be unlocked".
 - **RAR 4 is unverified** — RAR 5 has been tested against real samples; RAR 4 has not.
 - **Very large solid 7z archives** cost roughly 90 ms of LZMA2 decompression per page. Prefetching is designed to hide that, but jumping far ahead in a huge solid archive has a real, visible cost.
 - **Resume and bookmarks identify an archive by "file name + file size"** — rename the file, or change its contents so the size differs, and it counts as a different archive: your progress and bookmarks stay behind. That is the price of never storing a path.

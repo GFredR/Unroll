@@ -52,6 +52,14 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case bookmarkToggled(page: Int, marked: Bool)
     /// 双页配对口径:封面是否单独一页(2026-09-16)。只记开关,无页码无文件名
     case coverAloneChanged(Bool)
+    /// 加密归档需要密码(v2,2026-09-17)。只说明「流程走到这一步了」——
+    /// **不带任何密码信息**,连「用户输了几位」都不记
+    case passphraseRequired
+    /// 密码尝试结果(v2)。只记成/败布尔。
+    /// 密码本身**永远不进这里**:白名单只放行 on/off 这类布尔标签,
+    /// 而真实密码含大小写数字之外的字符(中文密码、符号)必然被 sanitize 丢掉 ——
+    /// 但这不构成安全保证,真正的保证是**调用方压根不传**(§5.10.4 的结构性红线)
+    case passphraseAttempt(success: Bool)
 
     var name: String {
         switch self {
@@ -71,6 +79,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .progressRestored:  return "progressRestored"
         case .bookmarkToggled:   return "bookmarkToggled"
         case .coverAloneChanged: return "coverAloneChanged"
+        case .passphraseRequired: return "passphraseRequired"
+        case .passphraseAttempt: return "passphraseAttempt"
         }
     }
 
@@ -108,6 +118,10 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return "\(page):\(marked ? "on" : "off")"
         case .coverAloneChanged(let on):
             return on ? "on" : "off"
+        case .passphraseRequired:
+            return nil
+        case .passphraseAttempt(let success):
+            return success ? "ok" : "fail"
         }
     }
 }
