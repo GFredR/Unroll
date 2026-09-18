@@ -447,18 +447,27 @@ public final class ArchiveDocument: Sendable {
 
     // MARK: - 图片条目判定
 
-    /// 可入阅读列表的条目:非目录、非隐藏文件、不在 __MACOSX/、扩展名受支持。
+    /// 可入阅读列表的条目:非目录、非隐藏文件、路径里没有 __MACOSX、扩展名受支持。
     /// 扩展名集对齐 M0 ArchiveEntry 注释(jpg/png/gif/webp/heic/tiff/avif 及常见变体)。
-    /// internal 而非 private:过滤规则本身要进单测(§6.2「非图片过滤」),
-    /// __MACOSX/ 目录场景无法用 fixture 复现(见 make_fixtures.sh 实测注记:
-    /// 非法 AppleDouble 内容会让 libarchive 整档 FATAL,合法内容则被其自行消化),
-    /// 因此该分支靠直接调用单测覆盖。
+    /// internal 而非 private:过滤规则本身要进单测(§6.2「非图片过滤」)。
+    ///
+    /// ⚠️ **`__MACOSX` 必须按「任意层级的目录名」判,不能只看第一段**(2026-09-18 实测修正)。
+    /// 旧写法是 `components.first == "__MACOSX"`,只挡住根层的 `/__MACOSX/xxx`。
+    /// 把整个 `vol01/` 目录(而不是它的内容)拖去压缩时,垃圾目录会出现在**第二层**,
+    /// 于是 `vol01/__MACOSX/page1.png` 漏进列表 —— 实测它不但成了页,还被自然排序
+    /// 排在 `vol01/page1.png` **前面**,即用户翻开第一页看到的是一张打包垃圾
+    /// (探针包 `nested-macosx.cbz`,修前 index 0 == `vol01/__MACOSX/page1.png`)。
+    ///
+    /// 关于 fixture 的边界:根层 `__MACOSX/` 塞普通文件会让 libarchive 整档 FATAL
+    /// (它按 AppleDouble 解析,见 make_fixtures.sh §3 注记),所以根层只能造合法
+    /// AppleDouble(且会被库自行消化)。**嵌套层不受此限** —— 库只特殊对待根层,
+    /// 第二层的 `__MACOSX/` 条目按普通条目列出来,因此这一条可以端到端测。
     static func isListedImage(_ path: String) -> Bool {
         guard !path.isEmpty, !path.hasSuffix("/") else { return false }   // 目录条目
         let components = path.split(separator: "/")
         guard let name = components.last, !components.isEmpty else { return false }
         if name.hasPrefix(".") { return false }                          // .DS_Store 等隐藏文件
-        if components.first == "__MACOSX" { return false }               // macOS 打包垃圾目录
+        if components.contains("__MACOSX") { return false }               // macOS 打包垃圾目录(任意层级)
         if components.dropLast().contains(where: { $0.hasPrefix(".") }) { return false }  // 隐藏目录内
         let ext = name.split(separator: ".").last.map { $0.lowercased() } ?? ""
         return C.imageExtensions.contains(ext)

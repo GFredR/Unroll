@@ -69,6 +69,28 @@ final class ArchiveDocumentTests: XCTestCase {
         }
     }
 
+    /// 「包里不只有图片」的真实形态:图片在子目录、非图片干扰项、**嵌套**垃圾目录。
+    ///
+    /// ★ 本用例锁一个 2026-09-18 修掉的真缺陷:旧规则只看路径第一段
+    /// (`components.first == "__MACOSX"`),于是 `vol01/__MACOSX/page1.png`
+    /// 漏进列表 —— 它不但成了页,还被自然排序排在 `vol01/page1.png` **前面**,
+    /// 用户翻开第一页看到的是一张打包垃圾。触发路径很平常:把整个 `vol01/`
+    /// 目录(而不是它的内容)拖去压缩。
+    func testOpenMixedContentArchiveListsOnlyImages() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("mixed-content.cbz"))
+
+        XCTAssertEqual(doc.entries.map(\.path),
+                       ["vol01/page1.png", "vol01/page2.png", "vol01/page10.png"],
+                       "嵌套 __MACOSX/ 、readme.txt、.DS_Store 一个都不许进列表")
+        XCTAssertEqual(doc.entries.map(\.index), [0, 1, 2])
+        XCTAssertEqual(doc.protection, .none)
+
+        // 第 0 页必须是真页,而不是垃圾目录里的同名文件(两者字节原样相同,
+        // 所以这条断言额外证明的是「排序与过滤联动正确」)
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page10.png"))
+    }
+
     // MARK: - open:加密四态(§5.9.1 实测行为表的逐行复刻)
 
     /// ZIP + ZipCrypto 全加密:能列目录但全部条目加密 → zip 走 .encrypted
@@ -352,9 +374,17 @@ final class ArchiveDocumentTests: XCTestCase {
         XCTAssertFalse(ArchiveDocument.isListedImage("vol01/.hidden.jpg"))
         XCTAssertFalse(ArchiveDocument.isListedImage(".hidden/page1.jpg"))
 
-        // __MACOSX 垃圾目录(前缀或裸目录名)
+        // __MACOSX 垃圾目录:根层(前缀或裸目录名)
         XCTAssertFalse(ArchiveDocument.isListedImage("__MACOSX/page1.png"))
         XCTAssertFalse(ArchiveDocument.isListedImage("__MACOSX/._page1.png"))
+
+        // ★ 嵌套层同样要挡(2026-09-18 修真缺陷:旧规则只判第一段,
+        //   `vol01/__MACOSX/page1.png` 会漏成页,且排序后占据第 0 页)
+        XCTAssertFalse(ArchiveDocument.isListedImage("vol01/__MACOSX/page1.png"))
+        XCTAssertFalse(ArchiveDocument.isListedImage("a/b/c/__MACOSX/x.jpg"))
+        // 反向:名字里含 __MACOSX 但不是独立路径段的,不该被误杀
+        // (目录段必须是精确等于,不能退化成子串匹配)
+        XCTAssertTrue(ArchiveDocument.isListedImage("my__MACOSX_notes/page1.png"))
 
         // 目录条目(尾部斜杠)与空串
         XCTAssertFalse(ArchiveDocument.isListedImage("vol01/"))

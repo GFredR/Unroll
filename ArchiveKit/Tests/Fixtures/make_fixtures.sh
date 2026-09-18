@@ -11,6 +11,9 @@
 #   no-images.cbz          只有 txt(→ .noImages)
 #   corrupted.cbz          纯文本伪装(→ .corrupted)
 #   damaged-page.cbz       目录完好、page2 负载被翻一字节(→ 完整性检查报 1 个坏页)
+#   mac-junk.cbz           Finder 风格:3 图 + 合法 AppleDouble 的 __MACOSX/._page1.png
+#   mixed-content.cbz      3 页在 vol01/ 下 + **嵌套** __MACOSX/page1.png + readme.txt
+#                          + .DS_Store(→ 锁「非图片一概不入列表」的回归,含第二层垃圾目录)
 #   many-entries.cbz       3 页 + 300 个零字节填充条目(→ 专测"列目录中途能被叫停",~32KB)
 #   plain.cbt              明文 tar(P0 格式补样本)
 #   encrypted-content.cb7  7z 内容加密(可列目录、不可解;-mhe=off)
@@ -146,7 +149,7 @@ print('📦 src/ 源图就绪(240×320 带标签纯色页)')
 PY
 
 # ---- 2. 清理旧产物(只删本轮确实会重建的;可选依赖缺失时保留对应样本) --------
-rm -f plain.cbz mac-junk.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt damaged-page.cbz many-entries.cbz
+rm -f plain.cbz mac-junk.cbz mixed-content.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt damaged-page.cbz many-entries.cbz
 if [ "$HAVE_PYZIPPER" = yes ]; then
   rm -f encrypted-zip.cbz encrypted-zip-aes.cbz
 fi
@@ -187,6 +190,32 @@ with zipfile.ZipFile('../mac-junk.cbz', 'w') as z:
     z.write('page10.png', 'page10.png')
     z.writestr('__MACOSX/._page1.png', apple_double)
 print('📦 Finder 风格样本就绪')
+PY
+)
+
+# ---- 3c. 「包里不只有图片」:图片在子目录 + 嵌套垃圾目录 + 非图片干扰 ------
+# 真实形态:用户把整个 vol01/ 目录(而不是它的内容)拖去压缩,macOS 会连带
+# 把 __MACOSX/ 放在**第二层**。配 readme.txt / .DS_Store 一起,一次覆盖
+# 「混合内容」的全部三种干扰项:非图片扩展名、隐藏文件、打包垃圾目录。
+# ⚠️ 这与 §3 根层 __MACOSX 的限制不同:libarchive 只特殊对待**根层**
+#    __MACOSX/(按 AppleDouble 解析),第二层的同类目录它按普通条目列出,
+#    所以本样本可以端到端驱动(2026-09-18 实测确认,详见 §3 注记)。
+# ⚠️ 本样本锁的是一个**真缺陷的回归**:修前 `vol01/__MACOSX/page1.png`
+#    会作为第 0 页出现,且自然排序把它排在 vol01/page1.png **前面** ——
+#    用户翻开第一页看到的是打包垃圾。
+(
+  cd staging
+  python3 - <<'PY'
+import zipfile
+
+with zipfile.ZipFile('../mixed-content.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write('page1.png',  'vol01/page1.png')
+    z.write('page2.png',  'vol01/page2.png')
+    z.write('page10.png', 'vol01/page10.png')
+    z.write('page1.png',  'vol01/__MACOSX/page1.png')   # 嵌套(第二层)垃圾目录
+    z.write('note.txt',   'readme.txt')
+    z.writestr('.DS_Store', b'')
+print('📦 混合内容样本就绪(3 页在 vol01/ 下 + 嵌套 __MACOSX + txt + 隐藏文件)')
 PY
 )
 
