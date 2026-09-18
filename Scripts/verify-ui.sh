@@ -92,6 +92,31 @@ reset_session() {
     printf '{"alive":false,"version":"%s","build":"%s","bootTime":%s}' \
         "$VERSION" "$VERSION" "$boot" > "$SESSION"
 }
+
+# ------------------------------------------------------- 界面语言(2026-09-18) --
+# 机制:`-AppleLanguages "(en)"` 作为**命令行参数**交给 App。它生效是因为
+# NSUserDefaults 的 **argument domain** 优先级最高 —— 不是碰巧,也不是黑魔法。
+# 判据用窗口标题(这一阶段标题就是 App 显示名),2026-09-18 实测三组对照:
+#
+#   基线  不传参数                        → «开卷»(系统语言)
+#   A    --args -AppleLanguages "(en)"   → «Unroll»   ← 参数确实进了 argv,
+#                                                       `ps -ww -o command=` 可见
+#   C    容器偏好写 zh-Hans + args 传 en  → «Unroll»   ← args 压过偏好
+#
+# ⚠️ 唯一的前提:**App 必须尚未运行**。LaunchServices 只把 argv 交给**新**实例;
+# 已有实例在跑时参数被静默丢弃(不报错,界面悄悄退回系统语言)—— 所以
+# shoot_password 里 `quit_app` 必须在带 `--args` 那次 `open` **之前**,顺序不能调。
+# 这也正是那里那道标题断言存在的理由:参数被丢弃时断言当场拦下,而不是把一张
+# 中文图悄悄存进英文槽位。
+#
+# 备选做法(已试,不用):把 AppleLanguages 写进容器偏好
+# ($HOME/Library/Containers/com.gfredr.unroll/Data/Library/Preferences/com.gfredr.unroll)
+# 同样能切,但它往**用户自己的 App 容器**里写持久状态 —— 脚本若被 SIGKILL,trap 来不及
+# 清,用户以后打开 App 就是英文界面且找不到原因。命令行参数用完即走、零残留,故选它。
+#
+# ⚠️ 别想"绕过 LaunchServices 直接 exec 二进制来传参":沙盒 App 被直接执行会在
+# `_libsecinit_appsandbox` 初始化阶段 **SIGILL 崩掉**(EXC_BAD_INSTRUCTION,
+# 2026-09-17 15:58:11 / 15:58:19 实测两次,还弹了系统崩溃报告窗)。传参只有 `open --args` 一条路。
 trap 'reset_session 2>/dev/null || true' EXIT
 
 # ------------------------------------------------------------------ 空态 --
@@ -157,14 +182,11 @@ fi
 if [ "$ONLY" = "all" ] || [ "$ONLY" = "password" ]; then
     head2 "加密归档 · 密码输入(v1.0.1 新增)"
 
-    # ⚠️ 语言覆盖的关键前提:**App 必须尚未运行**。
-    # LaunchServices 只在新实例启动时把 argv 交给 App;已有实例在跑时 `--args`
-    # 会被静默丢掉 —— 这正是"open --args 传不进 App"这个印象的来源。
-    # 2026-09-17 复测:先 quit_app 再传,语言确实切过去了(LANG 用 --args 传,
-    # 归档仍走 `open -a` 交给同一个实例,沙盒授权随打开事件一并给出)。
+    # ⚠️ 语言覆盖的关键前提:**App 必须尚未运行**(原因见上面"界面语言"那一段)。
+    # 顺序固定为 quit_app → 带 `--args` 冷启动,不能调换。
     #
     # 窗口标题在这一阶段就是 App 显示名(开卷 / Unroll),所以"语言有没有真的
-    # 切过去"是**机器判据** —— 不做这一步的话,切换失败会把一张中文图悄悄
+    # 切过去"是**机器判据** —— 没有这一步,参数被丢弃时只会拍出一张中文图
     # 存进英文槽位,而脚本全绿。
     shoot_password() {  # $1=语言  $2=输出文件名  $3=期望的窗口标题
         local lang="$1" out="$2" want_title="$3"
@@ -176,15 +198,24 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "password" ]; then
         quit_app
         reset_session
         sleep 1
+        # 带语言的那次 `open` 必须是**冷启动**这一次;后一条只是把 fixture 交给
+        # 已在跑的同一个实例(沙盒授权随打开事件一并给出)。
         open -a "$APP" --args -AppleLanguages "($lang)"
         sleep 2
         open -a "$APP" "$fixture"
         sleep 3
 
-        local title
-        title="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" {print $3; exit}')"
+        # 取标题用**轮询**,不是"固定 sleep 后取一次":窗口出现的时间不固定
+        # (冷启动 + LaunchServices,实测有 5 秒时窗口还没出来的),单次取样会把
+        # 一次正常的慢启动误报成"找不到窗口"。
+        local title="" i
+        for i in $(seq 1 15); do
+            title="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" {print $3; exit}')"
+            if [ -n "$title" ]; then break; fi
+            sleep 1
+        done
         if [ -z "$title" ]; then
-            bad "$lang:打开加密归档后找不到窗口"
+            bad "$lang:打开加密归档后 15 秒内没出现窗口"
             return
         fi
         if [ "$title" != "$want_title" ]; then
