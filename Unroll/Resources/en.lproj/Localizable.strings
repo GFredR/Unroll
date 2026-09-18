@@ -66,7 +66,7 @@
 "archive.empty.title" = "This archive is empty";
 "archive.empty.body" = "This archive doesn't contain any files.";
 "archive.page.failed.title" = "This page failed to load";
-"archive.page.failed.body" = "The file may be partially damaged. Other pages are not affected.";
+"archive.page.failed.body" = "This page is not an image, or it is damaged — either way it cannot be shown. Other pages are not affected.";
 
 /* ============ M3: Menus / Reading Modes ============ */
 

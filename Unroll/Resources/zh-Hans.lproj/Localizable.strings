@@ -66,7 +66,7 @@
 "archive.empty.title" = "归档里没有内容";
 "archive.empty.body" = "这个压缩包里没有包含任何文件。";
 "archive.page.failed.title" = "这一页读取失败";
-"archive.page.failed.body" = "文件可能部分损坏,其余页面不受影响。";
+"archive.page.failed.body" = "这一页不是图片,或已损坏(两种情况都读不出来)。其余页面不受影响。";
 
 /* ============ M3:菜单命令 / 阅读模式 ============ */
 

@@ -91,6 +91,51 @@ final class ArchiveDocumentTests: XCTestCase {
         XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page10.png"))
     }
 
+    /// 无扩展名的页(老式扫描包的命名习惯:`vol01/001`)按**内容**认。
+    ///
+    /// ★ 取舍是**故意**的:解码按内容识别,原先拦在门外的只是入口白名单
+    /// (修前实测:整包报「没有一个是图片格式」)。代价用同一条断言钉住 ——
+    /// 无扩展名的纯文本 `vol01/notes` 也会成为一页,由上层降级成失败卡片。
+    /// 方向是「宁可多发一张可见的失败卡片,不可静默丢掉一张真页」,
+    /// 别日后把它当 bug 改回静默丢页(样本与理由见 make_fixtures.sh §3d)。
+    func testOpenReadsExtensionlessPagesByContent() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("no-extension.cbz"))
+
+        XCTAssertEqual(doc.entries.map(\.path),
+                       ["vol01/001", "vol01/002", "vol01/003", "vol01/notes"])
+        XCTAssertEqual(doc.protection, .none)
+
+        // 前三页是真 PNG:按内容解出来就是源图字节,不是占位
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"))
+        XCTAssertEqual(try doc.data(at: 2), try Fixtures.srcData("page10.png"))
+        // 第 4 页是**代价本身**:原始字节照常拿得到(归档层不做内容判定),
+        // 它不是图片这件事由解码那一步发现并降级 —— 也正是这个设计让
+        // 归档层不必去读条目内容(读 = solid 包上 O(n²),见 §5.1)
+        XCTAssertEqual(try doc.data(at: 3), try Fixtures.srcData("note.txt"))
+    }
+
+    /// 缩略图目录:有些工具会在包里附一份缩小版副本(`thumbs/`)。留着不但多出
+    /// 条目,还会因为排序('t' < 'v')**排在真页前面** —— 用户翻第一页看到的是
+    /// 一张缩略图(探针包实测)。
+    ///
+    /// ★ 同时锁**护栏**:这条规则是软的,只在「排除后还剩别的页」时才生效。
+    /// `thumbs-only.cbz` 是反面样本 —— 排除后列表为空时必须退回全部条目;
+    /// 没有这道护栏,一个把页放在 `thumbs/` 里的怪包会被报成「没有图片」,
+    /// 即把能读的包说成读不了,比多露一张缩略图糟得多。
+    func testOpenExcludesThumbnailDirectoryButNeverEmptiesTheList() throws {
+        let doc = try ArchiveDocument.open(url: Fixtures.url("thumbs-and-pages.cbz"))
+        XCTAssertEqual(doc.entries.map(\.path),
+                       ["vol01/page1.png", "vol01/page2.png", "vol01/page10.png"],
+                       "thumbs/cover.png 与 ComicInfo.xml 都不许进列表")
+        XCTAssertEqual(try doc.data(at: 0), try Fixtures.srcData("page1.png"),
+                       "第 0 页必须是真页,不是那张缩略图")
+
+        // 护栏:整包只有 thumbs/ 时退回全部条目,而不是 noImages
+        let onlyThumbs = try ArchiveDocument.open(url: Fixtures.url("thumbs-only.cbz"))
+        XCTAssertEqual(onlyThumbs.entries.map(\.path), ["thumbs/p1.png", "thumbs/p2.png"])
+        XCTAssertEqual(try onlyThumbs.data(at: 1), try Fixtures.srcData("page2.png"))
+    }
+
     // MARK: - open:加密四态(§5.9.1 实测行为表的逐行复刻)
 
     /// ZIP + ZipCrypto 全加密:能列目录但全部条目加密 → zip 走 .encrypted
@@ -389,9 +434,47 @@ final class ArchiveDocumentTests: XCTestCase {
         // 目录条目(尾部斜杠)与空串
         XCTAssertFalse(ArchiveDocument.isListedImage("vol01/"))
         XCTAssertFalse(ArchiveDocument.isListedImage(""))
+    }
 
-        // 无扩展名 / 只有扩展名
-        XCTAssertFalse(ArchiveDocument.isListedImage("page1"))
+    /// ★ 2026-09-18 改判:无扩展名的条目**要收**(老式扫描包普遍是 `vol01/001`)。
+    ///
+    /// 原先它们被入口白名单挡掉,而解码走 `CGImageSourceCreateWithData` ——
+    /// **按内容识别、根本不看扩展名**,所以拦的是一批本来读得出来的真页
+    /// (修前实测:`no-extension.cbz` 整包报「没有一个是图片格式」)。
+    ///
+    /// 代价与方向见 `hasImageExtension` 注释与末条断言:**宁可多发一张可见的
+    /// 失败卡片,不可静默丢掉一张真页** —— 这条别日后当 bug 改回去。
+    func testIsListedImageAcceptsEntriesWithoutExtension() {
+        // 无点号 → 按内容认
+        XCTAssertTrue(ArchiveDocument.isListedImage("page1"))
+        XCTAssertTrue(ArchiveDocument.isListedImage("vol01/001"))
+        // 代价本身:无扩展名的文本也会成为一页(读不出图时降级成失败卡片)
+        XCTAssertTrue(ArchiveDocument.isListedImage("LICENSE"))
+
+        // 点号后面**不是纯字母** → 那不是扩展名分隔符,同样按无扩展名处理
+        // (`1.2` / `ch01.p01` 这类命名混进数字,不据此丢页)
+        XCTAssertTrue(ArchiveDocument.isListedImage("vol01/1.2"))
+        XCTAssertTrue(ArchiveDocument.isListedImage("ch01.p01"))
+        // 尾点(空扩展名)也不丢页 —— 空字符串不构成「认识的格式」
+        XCTAssertTrue(ArchiveDocument.isListedImage("page1."))
+
+        // 纯扩展名仍算隐藏文件(前导点那条规则先命中)
         XCTAssertFalse(ArchiveDocument.isListedImage(".png"), "纯扩展名视为隐藏文件")
+
+        // 反向:认识的图片扩展名照旧,大小写不敏感
+        XCTAssertTrue(ArchiveDocument.isListedImage("PAGE1.PNG"))
+    }
+
+    /// 缩略图目录的**判据**部分(护栏部分见 `testOpenExcludesThumbnailDirectory...`)
+    func testIsInThumbnailDirectoryMatchesExactPathSegment() {
+        XCTAssertTrue(ArchiveDocument.isInThumbnailDirectory("thumbs/cover.png"))
+        XCTAssertTrue(ArchiveDocument.isInThumbnailDirectory("vol01/thumbs/p1.png"), "任意层级都算")
+        XCTAssertTrue(ArchiveDocument.isInThumbnailDirectory("Thumbs/cover.png"), "大小写不敏感")
+        XCTAssertTrue(ArchiveDocument.isInThumbnailDirectory("a/thumbnails/x.jpg"))
+
+        // 只按**精确路径段**判,不退化成子串匹配
+        XCTAssertFalse(ArchiveDocument.isInThumbnailDirectory("thumbs.png"), "文件名里有 thumbs 但不在目录里")
+        XCTAssertFalse(ArchiveDocument.isInThumbnailDirectory("my_thumbs/p1.png"))
+        XCTAssertFalse(ArchiveDocument.isInThumbnailDirectory("p1.png"), "根层文件不属于任何目录")
     }
 }

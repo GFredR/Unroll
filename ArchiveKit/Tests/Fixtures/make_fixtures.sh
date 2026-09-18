@@ -149,7 +149,7 @@ print('📦 src/ 源图就绪(240×320 带标签纯色页)')
 PY
 
 # ---- 2. 清理旧产物(只删本轮确实会重建的;可选依赖缺失时保留对应样本) --------
-rm -f plain.cbz mac-junk.cbz mixed-content.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt damaged-page.cbz many-entries.cbz
+rm -f plain.cbz mac-junk.cbz mixed-content.cbz no-extension.cbz thumbs-and-pages.cbz thumbs-only.cbz partial.cbz empty.cbz no-images.cbz corrupted.cbz plain.cbt damaged-page.cbz many-entries.cbz
 if [ "$HAVE_PYZIPPER" = yes ]; then
   rm -f encrypted-zip.cbz encrypted-zip-aes.cbz
 fi
@@ -216,6 +216,54 @@ with zipfile.ZipFile('../mixed-content.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
     z.write('note.txt',   'readme.txt')
     z.writestr('.DS_Store', b'')
 print('📦 混合内容样本就绪(3 页在 vol01/ 下 + 嵌套 __MACOSX + txt + 隐藏文件)')
+PY
+)
+
+# ---- 3d. 扩展名 / 目录约定:两条方向相反的边界(2026-09-18 定稿) -----------
+# 由探针包实测驱动。两条规则**取舍方向相同**:宁可多发一张可见的失败卡片,
+# 不可静默丢掉一张真页。
+#
+#   no-extension.cbz    3 页无扩展名(vol01/001..003,内容是真 PNG)
+#                       + vol01/notes(无扩展名的纯文本,**故意留着**)
+#     → 老式扫描包普遍这样命名。解码走 CGImageSourceCreateWithData ——
+#       **按内容识别、根本不看扩展名**,所以这些页本来就读得出来,原先拦在
+#       门外的只是入口白名单(修前:整包报「没有一个是图片格式」)。
+#       代价用样本钉死:notes 也会成为一页,读不出图时降级成单页失败卡片。
+#       ⚠️ 这条断言是**有意**的,别日后当成 bug 又改回「静默丢页」
+#
+#   thumbs-and-pages.cbz 3 页在 vol01/ + thumbs/cover.png + ComicInfo.xml
+#     → 缩略图目录不进列表。修前 thumbs/cover.png 是第 1 页('t' < 'v'
+#       的排序结果),即用户翻开第一页看到的是张缩略图(2026-09-18 探针实测)
+#
+#   thumbs-only.cbz      只有 thumbs/p1.png + thumbs/p2.png
+#     → 锁软规则的护栏:排除后列表为空时必须**退回全部条目**。没有这道护栏,
+#       一个把页放在 thumbs/ 里的怪包会被报成「归档内没有找到图片」——
+#       把能读的包说成读不了,比多露一张缩略图糟得多
+(
+  cd staging
+  python3 - <<'PY'
+import shutil, zipfile
+
+shutil.copy('page1.png',  'ext_001')
+shutil.copy('page2.png',  'ext_002')
+shutil.copy('page10.png', 'ext_003')
+shutil.copy('note.txt',   'ext_notes')
+
+with zipfile.ZipFile('../no-extension.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
+    for n in ('001', '002', '003', 'notes'):
+        z.write('ext_' + n, 'vol01/' + n)
+
+with zipfile.ZipFile('../thumbs-and-pages.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write('page1.png',  'vol01/page1.png')
+    z.write('page2.png',  'vol01/page2.png')
+    z.write('page10.png', 'vol01/page10.png')
+    z.write('page1.png',  'thumbs/cover.png')   # 缩小版副本的约定位置
+    z.write('note.txt',   'ComicInfo.xml')      # 认识的扩展名 + 非图片 → 丢
+
+with zipfile.ZipFile('../thumbs-only.cbz', 'w', zipfile.ZIP_DEFLATED) as z:
+    z.write('page1.png', 'thumbs/p1.png')
+    z.write('page2.png', 'thumbs/p2.png')
+print('📦 扩展名 / 缩略图目录边界样本就绪')
 PY
 )
 

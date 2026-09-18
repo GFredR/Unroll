@@ -191,6 +191,11 @@ public final class ArchiveDocument: Sendable {
         for (i, path) in rawPaths.enumerated() where isListedImage(path) {
             imageIdx.append(i)
         }
+        // 软排除:缩略图目录。**只在还剩别的页时才生效** —— 万一某个包把仅有的
+        // 几页放在 `thumbs/` 里,宁可多读几张缩略图,也绝不能报「没有图片」
+        // (见 isInThumbnailDirectory 上关于「软 / 硬规则」的说明)
+        let withoutThumbnailDirs = imageIdx.filter { !isInThumbnailDirectory(rawPaths[$0]) }
+        if !withoutThumbnailDirs.isEmpty { imageIdx = withoutThumbnailDirs }
         guard !imageIdx.isEmpty else { throw ArchiveError.noImages(found: rawPaths.count) }
 
         // 自然排序:page2 < page10(§2.1 P0-8)。raw 顺序与排序结果解耦,
@@ -447,9 +452,14 @@ public final class ArchiveDocument: Sendable {
 
     // MARK: - 图片条目判定
 
-    /// 可入阅读列表的条目:非目录、非隐藏文件、路径里没有 __MACOSX、扩展名受支持。
-    /// 扩展名集对齐 M0 ArchiveEntry 注释(jpg/png/gif/webp/heic/tiff/avif 及常见变体)。
-    /// internal 而非 private:过滤规则本身要进单测(§6.2「非图片过滤」)。
+    /// 可入阅读列表的条目(硬规则):非目录、非隐藏文件、路径里没有 __MACOSX、
+    /// 扩展名不是「明明别的格式」。internal 而非 private:过滤规则本身要进单测
+    /// (§6.2「非图片过滤」)。
+    ///
+    /// 规则分**两层**,语义不同,别合并:
+    ///   · **硬**(本函数)=「这永远不是页」,无条件丢;
+    ///   · **软**(`isInThumbnailDirectory`)=「这大概不是页」,只在排除后
+    ///     还剩别的页时才丢。分开的理由写在那条上。
     ///
     /// ⚠️ **`__MACOSX` 必须按「任意层级的目录名」判,不能只看第一段**(2026-09-18 实测修正)。
     /// 旧写法是 `components.first == "__MACOSX"`,只挡住根层的 `/__MACOSX/xxx`。
@@ -462,6 +472,8 @@ public final class ArchiveDocument: Sendable {
     /// (它按 AppleDouble 解析,见 make_fixtures.sh §3 注记),所以根层只能造合法
     /// AppleDouble(且会被库自行消化)。**嵌套层不受此限** —— 库只特殊对待根层,
     /// 第二层的 `__MACOSX/` 条目按普通条目列出来,因此这一条可以端到端测。
+    ///
+    /// **扩展名策略**(2026-09-18 定稿,回答「认不认无扩展名的页」)——见 `hasImageExtension`。
     static func isListedImage(_ path: String) -> Bool {
         guard !path.isEmpty, !path.hasSuffix("/") else { return false }   // 目录条目
         let components = path.split(separator: "/")
@@ -469,8 +481,49 @@ public final class ArchiveDocument: Sendable {
         if name.hasPrefix(".") { return false }                          // .DS_Store 等隐藏文件
         if components.contains("__MACOSX") { return false }               // macOS 打包垃圾目录(任意层级)
         if components.dropLast().contains(where: { $0.hasPrefix(".") }) { return false }  // 隐藏目录内
-        let ext = name.split(separator: ".").last.map { $0.lowercased() } ?? ""
-        return C.imageExtensions.contains(ext)
+        return hasImageExtension(String(name))
+    }
+
+    /// 扩展名判定。四条规则,取舍方向一律是**「宁可多发一张可见的失败卡片,
+    /// 不可静默丢掉一张真页」**:
+    ///
+    ///   1. 认识的图片扩展名 → 收(`C.imageExtensions`)
+    ///   2. **完全没有点号** → 收。老式扫描包普遍用 `vol01/001` 这类命名,
+    ///      而解码走 `CGImageSourceCreateWithData` —— **按内容识别、根本不看
+    ///      扩展名**,所以这些页本来就读得出来,原先拦在门外的只是入口白名单。
+    ///      代价:包里若有无扩展名的非图片(`README` / `LICENSE`),它会成为一页;
+    ///      读不出图时降级成单页失败卡片(既有路径),**其余页不受影响**
+    ///   3. 点号后面**不是纯字母** → 也收。`1.2` / `ch01.p01` 里的点不是扩展名
+    ///      分隔符,真实扩展名基本都由字母构成(txt / xml / pdf / gz / db),
+    ///      混进数字的多半是名字的一部分 —— 不据此丢页(同规则 2 的取舍方向)
+    ///   4. 其余(纯字母扩展名但不认识,如 `.txt` / `.xml` / `.pdf`)→ 丢
+    ///
+    /// ⚠️ 刻意**不**在 open 阶段读前几字节验魔数:列目录时只读 header,去读条目
+    /// 内容会把 solid 7z / RAR 的 O(n) 变成 O(n²)(与 §5.1 同一理由),代价远大于
+    /// 收益。真正的判据交给解码那一步 —— 它对所有来源一视同仁。
+    private static func hasImageExtension(_ name: String) -> Bool {
+        guard let dot = name.lastIndex(of: ".") else { return true }        // 规则 2
+        let ext = name[name.index(after: dot)...].lowercased()
+        if C.imageExtensions.contains(ext) { return true }                  // 规则 1
+        guard !ext.isEmpty, ext.allSatisfy({ $0.isASCII && $0.isLetter })
+        else { return true }                                                // 规则 3(含 "page1." 这种空尾)
+        return false                                                        // 规则 4
+    }
+
+    /// 缩略图目录(**软**规则,2026-09-18 定稿):有些工具会在包里附带一份缩小版
+    /// 副本,放在 `thumbs/` 这类约定目录里。它们不是页 —— 留着不但多出条目,
+    /// 还因为排序会**排在真页前面**(`thumbs/` 的 `t` 常在 `vol01/` 的 `v` 之前),
+    /// 用户翻第一页看到的是一张缩略图(`thumbs-and-pages.cbz` 锁这个行为)。
+    ///
+    /// ⚠️ 这是**命名约定**判据,不是结构判据。结构判据(比像素尺寸、比与真页的
+    /// 一一对应)都得读条目内容,solid 包上又是 O(n²),不划算 —— 所以这条规则
+    /// 天生不如 `__MACOSX` 可靠,**必须做成软的**:`open` 只在「排除后还剩别的页」
+    /// 时才真的排除。宁可把某个把页放进 `thumbs/` 的怪包多读几页,也绝不能因为
+    /// 这条规则报「没有图片」(`thumbs-only.cbz` 锁这个护栏)。
+    /// 与 `__MACOSX` 的区别正在于此:后者语义上**不可能**装真页,所以是硬规则。
+    static func isInThumbnailDirectory(_ path: String) -> Bool {
+        path.split(separator: "/").dropLast()
+            .contains { C.thumbnailDirectoryNames.contains($0.lowercased()) }
     }
 }
 
@@ -537,6 +590,12 @@ enum C {
         "jpg", "jpeg", "png", "gif", "webp", "bmp",
         "heic", "heif", "avif", "tiff", "tif",
     ]
+
+    /// 缩略图目录名约定(小写;按**精确路径段**匹配,不退化成子串)。
+    /// 只收真有约定含义的几个 —— 宽泛的黑名单(如 `preview` / `cache`)会误伤
+    /// 真把页放在那种目录里的包,而软的只是「排除后还剩页才排除」这层护栏,
+    /// 不该拿它当借口乱加。见 `isInThumbnailDirectory`
+    static let thumbnailDirectoryNames: Set<String> = ["thumb", "thumbs", "thumbnails"]
 
     /// 列目录时每多少个条目问一次 `isCancelled`(2026-09-17)。
     /// 256 是「调用方等待粒度」与「调用开销」的折中:一个条目对应一次
