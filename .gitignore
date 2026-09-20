@@ -31,3 +31,8 @@ Scripts/.identity-patterns
 TestSamples/
 Scripts/gen_big_sample
 Scripts/bench_archive
+
+# 讲解类文档(个人学习产出,按 2026-08-26 定下的规则不入库)
+# 与 ARCHITECTURE / 测试文档这类「技术文档」不同 —— 它是「讲这个项目怎么想出来的」,
+# 面向自己回看,不是给仓库读者读的。文件留在本机,只是不进版本控制。
+docs/教学-*.html

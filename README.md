@@ -30,7 +30,8 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Resume where you left off** — per archive, it remembers the page, single/two-page layout, reading direction and zoom mode. Identity is "file name + file size", so no path is ever stored.
 - **Bookmarks** — `⌘D` marks the current page, `⌥⌘↑` / `⌥⌘↓` jump between bookmarks (wrapping at the ends), and the Bookmarks menu jumps straight to any marked page.
 - **Four zoom modes** — fit window / fit width / fit height / actual size (`⌘3`–`⌘6`), with pinch and double-click zoom layered on top.
-- **Go to page** — `⌥⌘G` jumps to a page number.
+- **Go to page** — `⌥⌘G` jumps to a page number, and shows you a preview of that page as you type, so a typo is visible before you commit to it.
+- **Thumbnail grid** (`⇧⌘G`) — see the whole book at once and click any cell to jump there. Every previous shortcut assumed you already knew where you were going; this is the first one for "which page was that spread on again?". It generates in **one sequential pass** (not "generate whatever you scroll to" — that degrades to quadratic on solid 7z), shows progress, and can be stopped at any time. If it hits the memory ceiling it **says so**, rather than leaving you waiting for pages that will never appear. Opening another archive or regenerating discards the previous batch.
 - **Save the current page as an image** (`⌘S`) — writes it out as PNG or JPEG. In two-page mode you get **the whole spread as you see it** (side by side, in your reading direction), not one isolated page.
 - **A draggable progress bar** — the HUD bar scrubs: the page number follows your drag, and it only jumps when you let go (instead of decoding a page for every step).
 - **Page number in the window title** — the title bar reads "file name · P.3/200", so multiple windows and Dock hover tell you where you are. `⇧⌘F` reveals the current file in Finder when you want to move on to the next volume.
@@ -151,7 +152,8 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⇧⌘L` / `⇧⌘R` | Left-to-right / right-to-left (manga) |
 | `⇧⌘↑` | Back to cover |
 | `⇧⌘↓` | Jump to last page |
-| `⌥⌘G` | Go to page… |
+| `⌥⌘G` | Go to page… (previews that page as you type) |
+| `⇧⌘G` | Thumbnail grid — see the whole book at a glance, click any cell to jump there |
 | `⌘S` | Save the current page as an image (whole spread in two-page mode) |
 | `⇧⌘F` | Reveal the current file in Finder |
 | `⇧⌘K` | Enter the archive's password to unlock encrypted pages (available when the current archive has any) |
@@ -203,6 +205,16 @@ Unroll/
 ```
 
 The reasoning behind these boundaries — and the decisions that shaped them — is in [ARCHITECTURE.md](ARCHITECTURE.md).
+
+## Documentation
+
+| Document | What's in it |
+| --- | --- |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | The decisions that set the tone — problem / alternatives / choice / cost — plus a table of what was deliberately **not** built |
+| [`docs/测试与验证.md`](docs/测试与验证.md) (Chinese) | Every test, measurement and benchmark: where the test counts come from, what each fixture is, and which reverse tests caught what |
+| [`docs/发布清单.md`](docs/发布清单.md) (Chinese) | The pre-release checklist: artifact provenance checks, identity hygiene, and the items only a human can sign off |
+
+The two `docs/` files are **Chinese-only** — the deeper engineering notes in this repository are written in Chinese. The architecture doc ships in both languages: [简体中文](ARCHITECTURE.zh-CN.md).
 
 ## Support this project
 

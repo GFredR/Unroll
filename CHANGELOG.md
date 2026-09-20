@@ -1,5 +1,19 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+**中文**
+- **缩略图网格**（`⇧⌘G`）——一眼看全卷，点任一格直达该页。此前所有快速移动手段（`⌥⌘G` 跳页 / `⌘D` 书签 / `⇧⌘↑↓` 首末页）都假设"你已经知道要去哪"，想找某一页只能一张张翻着认，这是第一个补上这个空缺的功能。三条实现口径值得说明：① **一趟顺序扫完**，不是"滚到哪生成哪"（后者在 solid 7z 上会让一遍滚动退化成平方级）；② 内存到顶即**停止生成**并**明说**"后面的页不会有图"，绝不让你一直等 —— 而不是偷偷淘汰已经生成的页（那会把平方级请回来）；③ 渲染路径**不碰任何 I/O**，滚动永远不会把读盘带进来
+- **跳转面板就地预览**（`⌥⌘G`）——输入页码时就地显示那一页，输错当场看得见，不必先跳过去再退回来。停止输入 300ms 才解码（不会每敲一个字符解一次）；网格里已经有那一页时直接复用，不再解码第二遍
+- 新增「显示 → 缩略图网格」菜单项；网格面板里可随时**停止**生成、也可**重新生成**；换书或重新生成都会作废旧的一批缩略图
+- 网格生成进度与四种停止原因（扫完了 / 内存到顶 / 你叫停的 / 包坏得走不下去）**分别说明** —— 合成一句必然要说谎
+
+**English**
+- **Thumbnail grid** (`⇧⌘G`) — see the whole book at a glance and click any cell to jump there. Every earlier shortcut assumed you already knew where you were going; this is the first one that answers "which page was that spread on again?". Three implementation choices worth naming: (1) it generates in **one sequential pass**, not "whatever you scroll to" — the latter degrades to quadratic on solid 7z; (2) hitting the memory ceiling **stops generation and says so** rather than silently evicting pages you already have (which would reintroduce the quadratic cost); (3) the render path does **no I/O at all**, so scrolling never pulls disk reads into drawing.
+- **Preview in the go-to-page panel** (`⌥⌘G`) — typing a page number shows that page in place, so a typo is visible before you commit. Decoding waits 300 ms after you stop typing; if the thumbnail grid already has that page it is reused instead of decoded twice.
+- New "View → Thumbnail grid" menu item. The panel can **stop** generation at any time and **regenerate** on demand; opening another archive or regenerating discards the previous batch.
+- Progress and the four stop reasons (finished / memory ceiling / cancelled by you / archive unreadable) are reported **separately** — collapsing them into one message would have to lie about at least one.
+
 ## 1.0.1 — 2026-09-17 · 首个公开发布 / First public release
 
 首个公开版本 / First public release.

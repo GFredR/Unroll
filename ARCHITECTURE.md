@@ -1,12 +1,15 @@
+**English** | [简体中文](ARCHITECTURE.zh-CN.md)
+
 # Architecture
 
-Unroll is small enough to read in an afternoon, but a handful of decisions carry most of the weight. This document records them: the problem, the alternatives that were considered, and why this one won. Numbers here are measured, not estimated — the full methodology lives in [`docs/测试与验证.md`](docs/测试与验证.md).
+Unroll is small enough to read in an afternoon, but a handful of decisions carry most of the weight. This document records them: the problem, the alternatives that were considered, and why this one won. Numbers here are measured, not estimated — the full methodology lives in [`docs/测试与验证.md`](docs/测试与验证.md) (Chinese).
 
 ## Layers
 
 ```mermaid
 flowchart TB
     UI["Unroll.app<br/>SwiftUI reader, menus, HUD, diagnostics"]
+    Grid["PageGridBuilder<br/>one sequential thumbnail pass<br/>+ its own bounded pool"]
     QL["UnrollQuickLook<br/>two .appex: thumbnail + preview<br/>first page only, no index"]
     Store["PageStore actor<br/>prefetch, LRU cache, pixel budget"]
     Kit["ArchiveKit<br/>SwiftPM package, zero UI"]
@@ -14,17 +17,20 @@ flowchart TB
     Lib["libarchive<br/>ships with macOS, BSD-2"]
 
     UI --> Store
+    UI --> Grid
+    Grid --> Kit
     Store --> Kit
     QL --> Kit
     Kit --> Shim
     Shim --> Lib
 ```
 
-The split is not cosmetic. `ArchiveKit` knows nothing about SwiftUI, AppKit or the reader's needs, so it can be reused as-is by an iOS or iPadOS build — and it is tested on its own, without launching an app. The Quick Look extensions go straight to `ArchiveKit` too, skipping `PageStore` entirely: `PageStore` exists to prefetch and cache *consecutive* pages, which is exactly what a thumbnail provider must not do.
+The split is not cosmetic. `ArchiveKit` knows nothing about SwiftUI, AppKit or the reader's needs, so it can be reused as-is by an iOS or iPadOS build — and it is tested on its own, without launching an app. The Quick Look extensions go straight to `ArchiveKit` too, skipping `PageStore` entirely: `PageStore` exists to prefetch and cache *consecutive* pages, which is exactly what a thumbnail provider must not do. The thumbnail grid skips `PageStore` for the same reason from the opposite direction — it needs a *whole-document* sweep with no eviction, which is precisely what a consecutive-page cache is not (Decision 7).
 
 | Layer | Responsibility | Depends on |
 | --- | --- | --- |
 | `Unroll.app` | Views, menus, keyboard, HUD, recents, crash diagnostics | `PageStore` |
+| `PageGridBuilder` | One sequential pass over the whole archive, downsampling each page; a bounded pool that **stops** at the ceiling instead of evicting | `ArchiveKit` |
 | `UnrollQuickLook` | Two Quick Look extensions: read page 1 within a pixel budget, report encrypted / unreadable honestly | `ArchiveKit` |
 | `PageStore` | Prefetching (±2 pages), cache eviction, decode scheduling | `ArchiveKit` |
 | `ArchiveKit` | Format detection, natural sort, sequential page reading | `CArchiveShim` |
@@ -109,6 +115,27 @@ A failure in the probe is therefore advisory, never destructive: the menu item i
 
 Only `cbz / cbr / cb7 / cbt` are claimed. Bare `.zip` is deliberately excluded even though the app can read it: claiming it would route every ordinary ZIP in the system through a comic reader that will show "cannot preview" for most of them.
 
+## Decision 7 — The thumbnail grid inverts Decision 3's eviction policy, on purpose
+
+**The problem.** Every navigation shortcut the app had assumed the reader already knew where they were going: `⌥⌘G` takes a page number, `⌘D` marks one, `⇧⌘↑↓` go to the ends. Finding "that two-page spread, somewhere in the middle" meant paging through and recognising it. The grid is the first feature that answers a question the others cannot.
+
+**Why the obvious implementation is quadratic.** A grid is used by *random* access — scroll to the end, then back to the start. But `SequentialPageReader` only moves forward (Decision 2): reading page *k* means closing the handle, reopening, and walking *k* headers. "Generate thumbnails as they scroll into view" therefore turns one pass through the grid into **O(n²)** — the same trap Decision 2 exists to avoid, reached from a different direction.
+
+**What was chosen.**
+
+| Choice | Reason |
+| --- | --- |
+| **One sequential pass**, in document order | Total cost is pinned to O(n) regardless of how the user scrolls. The trade is that *when* a given page becomes visible is decided by scan progress, not by scrolling. |
+| **Budget stops generation; it does not evict** | This is the deliberate inversion of Decision 3. Evicting a grid thumbnail means some page the user scrolls back to needs a random-access re-read — which is exactly the quadratic cost the sequential pass just eliminated. Stopping at the ceiling has no bad branch; silently degrading does. |
+| **A third, independent pool** | Grid thumbnails (256 px long edge) and `PageCache`'s demoted thumbnails (1600 px) differ by an order of magnitude. Sharing one budget lets either starve the other. Constants live in `DesignSystem.PageBudget`. |
+| **Render path does no I/O** | The view only queries the pool. Scrolling can never pull a disk read into drawing. |
+
+**Why Decision 3's policy is still right for `PageCache`.** The two caches differ because their *access patterns* differ, not because one of them is wrong. `PageCache` serves previous/next paging — a near-linear walk, where dropping a page and re-reading it a few pages later is cheap and bounded. The grid serves whole-document random access, where any eviction can cost a full rescan at an arbitrary moment. Same building, opposite rules; the rule has to follow the access pattern.
+
+**The subtlety worth remembering.** The scan thread writes thumbnails into the pool **synchronously** under a lock, rather than hopping back to the main actor once per image. The first design spawned one task per page — which both manufactured N tasks and left a window where the build had *reported* completion while the pool was still empty (visible to users as "the progress bar finished but the pictures are not there yet"). Because the writer is now off the main actor, per-generation isolation can no longer be a flag: **each generation gets its own pool object**, so a late write from a scan of the previous archive lands in a pool nobody reads.
+
+**Honest note on verification.** The algorithm and view-model layers are covered by 20 unit tests, including the two failure-classification rules (an encrypted page is *skipped*, not *damaged*; a decode failure does not reopen the scanner, while a byte-read failure must). The **panel's appearance in a real window has no automated evidence** — opening it needs `⇧⌘G`, and injecting keystrokes runs into the accessibility TCC boundary. It is listed as a known gap rather than described as verified.
+
 ---
 
 ## What was deliberately not built
@@ -118,7 +145,7 @@ An architecture is partly defined by its refusals. Each of these was considered 
 | Not built | Why |
 | --- | --- |
 | Library / cover wall / metadata | That is YACReader's territory. Building it would trade away the "lightweight" positioning for a feature set that is already solved elsewhere. |
-| Password entry for encrypted archives | `libarchive` decrypts only ZIP (ZipCrypto). 7z encryption is not supported by the system library at all, so a password box would work for one format and silently fail for another. v1 detects, explains, and stops there. |
+| Password entry for **7z**, and any password *store* | The shipped `libarchive` cannot decrypt 7z at all — the identical failure comes back whether or not a password is supplied, so a box there could never succeed. 7z gets an explanation instead of a prompt. ZIP (ZipCrypto / AES) and RAR *do* get an entry (added in v1.1, `⇧⌘K`, plus a button on each encrypted placeholder card); the passphrase lives in memory only and is never written to disk. |
 | L1/L2 crash reporting (Sentry, self-hosted, silent upload) | Incompatible with "zero operating cost" and with an app that has no network entitlement by design. |
 | Custom `signal` handlers for crash capture | Fragile, and the payoff over the abnormal-exit self-check is small relative to the risk of making a crash worse. |
 | Extracting archives to disk | The entire premise. Extraction is what this app exists to avoid. |
@@ -132,11 +159,13 @@ The suite is split by what it needs to run, so that fast feedback stays fast:
 
 | Target | Launch an app? | Count | Covers |
 | --- | --- | --- | --- |
-| `ArchiveKit` (SwiftPM) | No | 40 | Format handling, natural sort, sequential reads, byte-exact fixture comparisons |
-| `UnrollLogicTests` | No | 5 | The reader's contract against `ArchiveKit`, run in milliseconds |
+| `ArchiveKit` (SwiftPM) | No | 70 | Format handling, natural sort, sequential reads, integrity scanning, byte-exact fixture comparisons |
+| `UnrollLogicTests` | No | 6 | The reader's contract against `ArchiveKit`, run in milliseconds |
 | `UnrollQuickLookTests` | No | 11 | The Quick Look extensions' page-reading logic: first-page selection, downsampling limits, and the full failure-state mapping |
-| `UnrollTests` (app-hosted) | Yes | 91 | View model logic, layout/direction, progress and bookmark persistence, recents, localisation keys |
+| `UnrollTests` (app-hosted) | Yes | 187 | View model logic, layout/direction, progress and bookmark persistence, recents, localisation keys, menu/shortcut guards, the thumbnail grid's scan-and-budget rules, and the memory-budget invariants themselves |
+
+274 cases / 272 passing / 2 skipped as of 2026-09-20 (the skips are the external-sample and synthetic-benchmark cases, both opt-in). Counts are de-duplicated by test name — the raw log prints two lines per case.
 
 One boundary is worth stating explicitly, because it is a real gap rather than an oversight: the extensions' **logic** is covered above, but **whether the system actually calls them** cannot be verified headlessly — an `.appex` is launched on demand by Quick Look, and in a restricted environment even `pluginkit -m` is refused and `qlmanage` cannot run. What *is* checked automatically is static correctness (extension point, architectures, nested signature, claimed UTIs). The end-to-end step is delegated to `Scripts/verify-quicklook.sh`, which must be run in a normal login session.
 
-Fixtures are generated by a script, are deterministic, and are committed — so "byte-exact page comparison" means the same bytes on every machine. Regenerating them is a script run plus a test run; see [`docs/测试与验证.md`](docs/测试与验证.md).
+Fixtures are generated by a script, are deterministic, and are committed — so "byte-exact page comparison" means the same bytes on every machine. Regenerating them is a script run plus a test run; see [`docs/测试与验证.md`](docs/测试与验证.md) (Chinese).
