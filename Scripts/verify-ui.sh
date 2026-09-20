@@ -34,6 +34,21 @@ DMG="$DIST_DIR/$APP_NAME-$VERSION.dmg"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/docs}"
 ONLY="${ONLY:-all}"
 
+# 位置参数一律拒绝。ONLY= / APP= / OUT_DIR= 都是**环境变量**,得写在命令前面:
+#   ONLY=grid APP=<Debug.app> ./Scripts/verify-ui.sh
+# 写成 `./Scripts/verify-ui.sh ONLY=grid` 时它只被当成位置参数,脚本一个字都不读,
+# 于是**静默跑全套**。2026-09-20 实测撞了两次(第二次是在 `time (...)` 里),
+# 两次都看到"输出了 7 个段落却以为只有一个"。"以为只跑了一段、其实跑了全部"
+# 属于最坏的一类误导:它不会报错,只会让结论对不上号。宁可当场拦下。
+if [ "$#" -gt 0 ]; then
+    echo "✗ 不接受位置参数:$*" >&2
+    echo "  这几个是环境变量,要写在命令**前面**:" >&2
+    echo "    ONLY=<段名> APP=<.app> OUT_DIR=<目录> $0" >&2
+    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump" >&2
+    echo "  (grid / jump 需要可驱动的 Debug 版,见文末说明)" >&2
+    exit 2
+fi
+
 SUPPORT_DIR="$HOME/Library/Containers/com.gfredr.unroll/Data/Library/Application Support/Unroll"
 SESSION="$SUPPORT_DIR/session.json"
 # 目录可能还不存在(App 从未在本机跑过,或容器被清理过)—— 不先建好,
@@ -117,7 +132,20 @@ reset_session() {
 # ⚠️ 别想"绕过 LaunchServices 直接 exec 二进制来传参":沙盒 App 被直接执行会在
 # `_libsecinit_appsandbox` 初始化阶段 **SIGILL 崩掉**(EXC_BAD_INSTRUCTION,
 # 2026-09-17 15:58:11 / 15:58:19 实测两次,还弹了系统崩溃报告窗)。传参只有 `open --args` 一条路。
-trap 'reset_session 2>/dev/null || true' EXIT
+#
+# ⚠️ 2026-09-20 补记:连 `open --args` 本身也不行。用一个只回写自己 argv 的
+# 探针 App 实测:经 `open` 启动 argc=1(参数一个没到),直接 exec 才有 4 个 ——
+# `open -n` / 不带 -a / 写绝对路径 /usr/bin/open 四种变体结果一致。
+# 所以网格与跳转面板那两段取证改用**标记文件**触发(见文末),不走 argv。
+trap 'reset_session 2>/dev/null || true; cleanup_probe_flags' EXIT
+
+# 驱动标记必须清干净:标记文件一旦残留,Debug 版 App 在**下一次正常启动**时
+# 也会自动跑演示 —— 用户自己打开会莫名其妙看到自动翻页 / 面板自动弹出,
+# 而且不知道是谁干的。所以挂进 trap,中途 exit 也照清。
+cleanup_probe_flags() {
+    local dir="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
+    rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" 2>/dev/null || true
+}
 
 # ------------------------------------------------------------------ 空态 --
 if [ "$ONLY" = "all" ] || [ "$ONLY" = "empty" ]; then
@@ -354,6 +382,175 @@ if [ "$ONLY" = "all" ] || [ "$ONLY" = "dmg" ]; then
             hdiutil detach "$MOUNT" >/dev/null 2>&1 || hdiutil detach -force "$MOUNT" >/dev/null 2>&1
         fi
     fi
+fi
+
+# ------------------------- 缩略图网格 / 跳转面板预览(v1.1,2026-09-18 新增) --
+# 验的是 v1.1 加的两个「先看再跳」入口:
+#   · ⇧⌘G 缩略图网格      —— 一次铺开整卷,点哪页去哪页
+#   · ⌥⌘G 跳转面板的预览  —— 输页码时就先看到目标页长什么样
+#
+# ⚠️ 前提:必须用**可驱动的 .app**(Debug 版)。这两个面板只能靠按键打开,
+#    而按键注入被 TCC 挡死(2026-09-20 实测:`osascript … System Events …
+#    keystroke` 报 1002「osascript 不允许发送按键」)。出路是让 App 自己驱动
+#    ViewModel —— 那套代码(Unroll/App/DemoDriver.swift)只在 DEBUG 编译。
+#
+#    APP=<Debug 版 Unroll.app> OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh ONLY=grid
+#
+#    拿 Release 产物跑 → 判「前提不满足」而不是「功能坏了」:Release 版里
+#    根本没有驱动代码,连 demo-driver.log 都不会被创建。这一点很要紧 ——
+#    把「压根没执行」报成「执行失败」,会把人送去查一个没跑过的功能。
+#    (同一条教训见 docs/测试与验证.md §11.9:守卫自测脚本把产物过期误诊成
+#     守卫有洞,顺着走就会去拆掉守卫本身。)
+#
+# 判据分两层,缺一不可:
+#   · 驱动状态行 → 证明**数据对**(生成了几张 / 预览的是哪一页)
+#   · 截图       → 证明**长得对**,这层只能人看
+# 只看截图会漏掉「铺出来了但少几页」;只看状态行会漏掉「数据对但版式塌了」。
+if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
+    head2 "缩略图网格 / 跳转预览取证(ONLY=$ONLY)"
+
+    PROBE_TMP="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
+    DRIVER_LOG="$PROBE_TMP/demo-driver.log"
+    mkdir -p "$PROBE_TMP"
+
+    # ---- 多页样本 ----
+    # 复用 plain.cbz 是不行的:它只有 3 页,一格一页地铺根本看不出「一屏多张」——
+    # 而那正是这两个面板存在的理由。样本落在**仓库之外**(与 Unroll-dist 同规)。
+    PROBE_DIR="${PROBE_DIR:-${ROOT_DIR}-manual-fixtures}"
+    PROBE_SAMPLE="${PROBE_SAMPLE:-$PROBE_DIR/probe-grid-sample.cbz}"
+    PROBE_PAGES="${PROBE_PAGES:-30}"
+    if [ ! -s "$PROBE_SAMPLE" ]; then
+        mkdir -p "$PROBE_DIR"
+        GEN="$PROBE_DIR/gen_big_sample"
+        if [ ! -x "$GEN" ]; then
+            info "编译样本生成器…"
+            xcrun --sdk macosx swiftc -O -o "$GEN" Scripts/gen_big_sample.swift >/dev/null 2>&1 \
+                || { bad "gen_big_sample 编译失败"; exit 2; }
+        fi
+        info "造 $PROBE_PAGES 页取证样本(仓库外,约 1s)…"
+        "$GEN" --pages "$PROBE_PAGES" --width 600 --height 850 --quality 0.5 \
+               --out "$PROBE_SAMPLE" >/dev/null 2>&1 \
+            || { bad "样本生成失败"; exit 2; }
+    fi
+    PROBE_PAGES_ON_DISK="$(unzip -l "$PROBE_SAMPLE" 2>/dev/null | grep -c '\.jpg$' || true)"
+    ok "取证样本:$(basename "$PROBE_SAMPLE")(${PROBE_PAGES_ON_DISK} 页)"
+
+    # ---- 场景 ----
+    if [ "$ONLY" = "grid" ]; then
+        SCENE="grid"; SHOT="shot-grid-panel.png"; WAIT_PAT="scene=grid pages="
+    else
+        SCENE="jump"; SHOT="shot-jump-preview.png"; WAIT_PAT="scene=jump current="
+    fi
+
+    quit_app
+    reset_session
+    # 每次只留一个标记:虽然驱动的判定顺序是 grid > jump > paging,
+    # 但「跑的是 grid 却拍到了 jump」这种失败查起来极费劲,不值得省那一次 rm
+    cleanup_probe_flags
+    rm -f "$DRIVER_LOG"
+    touch "$PROBE_TMP/demo-$SCENE"
+
+    open -a "$APP" "$PROBE_SAMPLE"
+
+    # 两段等待,各判一件事 —— 混成一段会把「没执行」和「执行失败」搅在一起。
+    #
+    # 第一段短:**可驱动的产物在 App 一起来就会写第一行**(DemoDriver 挂在视图的
+    # onAppear 上),所以 10 秒还不见日志,基本就能断定这份产物里没有驱动。
+    # 没必要为「根本没跑」白等一分钟 —— 而白等还有个副作用:超时久了人会
+    # 以为是环境偶发,重跑一遍,然后又失败一次。
+    #
+    # ⚠️ 别改用「二进制里有没有 demo-driver.log 字符串」来提前判定。2026-09-20
+    # 实测过:Release 构建会把字符串优化掉 —— 二进制里 `session` 还在、`session.json`
+    # 已经没了,`UnrollSourceCommit` 更是只存在于 Info.plist。字符串判据是脆的,
+    # 而它误判的方向恰好是**把正常的 Debug 版判成没驱动**(Debug 的代码还在
+    # 单独的 Unroll.debug.dylib 里,只扫主二进制就找不到)。
+    for i in $(seq 1 40); do            # 上限 10s
+        [ -f "$DRIVER_LOG" ] && break
+        sleep 0.25
+    done
+    if [ ! -f "$DRIVER_LOG" ]; then
+        bad "10 秒内没有出现驱动日志 —— 被测产物不含驱动(仅 DEBUG 编译)"
+        info "当前 APP=$APP"
+        info "构建:xcodebuild build -project Unroll.xcodeproj -scheme Unroll \\"
+        info "        -configuration Debug -destination 'platform=macOS' -derivedDataPath <目录>"
+        info "说明:⇧⌘G / ⌥⌘G 无法从外部注入(TCC 拒绝发送按键),只能由 App 自己驱动"
+        exit 2
+    fi
+    ok "驱动已启动"
+
+    # 第二段:等场景跑完。网格要顺序扫全档,样本越大越慢
+    for i in $(seq 1 240); do           # 再给 60s
+        grep -q "$WAIT_PAT" "$DRIVER_LOG" && break
+        sleep 0.25
+    done
+    if ! grep -q "$WAIT_PAT" "$DRIVER_LOG"; then
+        # 有驱动、但场景没跑完 —— 这一条是**真失败**,不是前提不满足
+        bad "驱动没跑完场景(日志里没有 $WAIT_PAT)"
+        info "日志尾部:"
+        tail -5 "$DRIVER_LOG" | sed 's/^/      /'
+        exit 1
+    fi
+
+    # ---- 机器判据:状态行 ----
+    # 收进变量再解析,不走管道:set -o pipefail 下 `… | grep -q` 会因 SIGPIPE
+    # 打出互相矛盾的结论(build-app.sh 里记过同类坑)
+    LINE="$(grep "$WAIT_PAT" "$DRIVER_LOG" | tail -1 || true)"
+    field() { printf '%s\n' "$LINE" | sed -n "s/.*[ =]$1=\([0-9a-zA-Z]*\).*/\1/p"; }
+    info "状态行:$LINE"
+
+    if [ "$ONLY" = "grid" ]; then
+        G_PAGES="$(field pages)"; G_GEN="$(field generated)"; G_STOP="$(field stop)"
+        G_THUMBS="$(field thumbs)"; G_SKIP="$(field skipped)"; G_FAIL="$(field failed)"
+        if [ "${G_STOP:-nil}" = "full" ]; then
+            ok "生成正常结束(stop=full)"
+        else
+            bad "生成没跑完:stop=${G_STOP:-nil}(nil = 30s 内没等到结束)"
+        fi
+        [ "${G_GEN:-0}" = "${G_PAGES:-x}" ] && ok "报告覆盖全档:$G_GEN/$G_PAGES" \
+            || bad "报告没覆盖全档:generated=$G_GEN pages=$G_PAGES"
+        # 池子里真有图 ≠ 报告说生成了几张 —— 报告可能对而池子是空的
+        [ "${G_THUMBS:-0}" = "${G_PAGES:-x}" ] && ok "池中确有图:thumbs=$G_THUMBS" \
+            || bad "池中图数与页数不符:thumbs=$G_THUMBS pages=$G_PAGES"
+        [ "${G_FAIL:-1}" = "0" ] && [ "${G_SKIP:-1}" = "0" ] \
+            && ok "样本无坏页无加密页(failed=0 skipped=0)" \
+            || bad "不该有失败/跳过:failed=$G_FAIL skipped=$G_SKIP"
+    else
+        J_CUR="$(field current)"; J_PREV="$(field previewPage)"
+        J_HAS="$(field hasPreview)"; J_FAIL="$(field failure)"; J_LOAD="$(field loading)"
+        [ "${J_HAS:-0}" = "1" ] && ok "预览已取到图(previewPage=$J_PREV)" \
+            || bad "预览没取到图:hasPreview=$J_HAS failure=$J_FAIL loading=$J_LOAD"
+        # 配对断言 —— 面板的全部价值就是「看一眼确认是哪一页」,
+        # 显示出错页比什么都不显示更糟(见 ReaderView.preview 的注释)
+        [ "${J_PREV:-x}" = "${J_CUR:-y}" ] && ok "预览页与当前页一致:$J_PREV" \
+            || bad "预览页与当前页不符:previewPage=$J_PREV current=$J_CUR"
+        [ "${J_FAIL:-1}" = "0" ] && [ "${J_LOAD:-1}" = "0" ] \
+            && ok "预览不是失败态也不是转圈态" \
+            || bad "预览停在异常态:failure=$J_FAIL loading=$J_LOAD"
+    fi
+
+    # ---- 截图 ----
+    # sheet 是独立窗口,且**没有标题** —— 主窗口的标题是「文件名 · P.n/m」。
+    # 这两点合起来是「哪个窗口是面板」的可靠判据(比按尺寸挑稳:主窗口
+    # 900x508、网格面板 720x520,高度几乎一样,按尺寸会选错)
+    ID=""
+    for i in $(seq 1 20); do
+        ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3=="" {print $1; exit}')"
+        [ -n "$ID" ] && break
+        sleep 0.5
+    done
+    if [ -z "$ID" ]; then
+        bad "没找到面板窗口(sheet 应为独立无标题窗口)"
+    else
+        rm -f "$OUT_DIR/$SHOT"
+        screencapture -l"$ID" -x -o "$OUT_DIR/$SHOT" 2>/dev/null
+        if [ -s "$OUT_DIR/$SHOT" ]; then
+            ok "$SHOT"
+        else
+            bad "$SHOT 截图失败"
+        fi
+    fi
+
+    cleanup_probe_flags
 fi
 
 # ------------------------------------------------------------------ 收尾 --
