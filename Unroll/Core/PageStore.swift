@@ -102,6 +102,34 @@ actor PageStore {
         cache.hasFullImage(index)
     }
 
+    // MARK: - 单页降采样预览(v1.1,2026-09-18:跳页面板)
+
+    /// 取某页的**降采样**图,给跳页面板的预览用。
+    ///
+    /// 与 `image(at:)` 的两处刻意差别:
+    ///   · **不写全分辨率缓存** —— 一张 420px 的预览图进 LRU,会把
+    ///     「翻回去不白屏」的那几页顶掉,代价远大于收益;
+    ///   · **不复用 in-flight 去重** —— 预览是**一次性**的(面板一关就没人要了),
+    ///     为它多留一份跨请求状态不划算。
+    ///
+    /// 走**同一个顺序扫描器**(而不是另开一个实例)是权衡后的选择:
+    /// 用户看到预览后绝大多数会真的跳过去,于是这次读取不是浪费,
+    /// 而是把扫描器**提前挪到了他要去的页**;反之若另开实例,那趟读取
+    /// 对随后的跳转毫无帮助,等于白走一遍。代价是「预览了又取消」会让
+    /// 扫描器停在目标页,下一次翻页可能触发一次重开(O(已读页数))——
+    /// 有界且罕见,换上面那个「不白走」是划算的。
+    func previewImage(at index: Int, maxPixel: CGFloat) async throws -> CGImage {
+        guard document.entries.indices.contains(index) else {
+            throw ArchiveError.unknown(code: 0, message: "page \(index) out of range")
+        }
+        let data = try readRaw(index)
+        // 解码同样放后台:即使降到 420px,解一张 4000×6000 仍要几十毫秒,
+        // 占着 actor 会卡住随后的跳页请求
+        return try await Task.detached(priority: .userInitiated) {
+            try PageDecoder.decodeThumbnail(data, maxPixel: maxPixel)
+        }.value
+    }
+
     // MARK: - 预读(图 5 PF 分支)
 
     /// 锚点更新:翻到新页后调用。取消全部旧预读,预读 +1/+2(图 5 只向后,
@@ -175,6 +203,39 @@ enum PageDecoder {
 
         guard let source = CGImageSourceCreateWithData(data as CFData, options),
               let image = CGImageSourceCreateImageAtIndex(source, 0, options) else {
+            throw ArchiveError.corrupted
+        }
+        return image
+    }
+
+    /// 降采样解码(v1.1,2026-09-18:缩略图网格 / 跳页预览)。
+    ///
+    /// 走 ImageIO 的**缩略图路径**:它从压缩数据里直接解出小图,
+    /// 不先把整张图解成全尺寸再缩。这是整套网格能成立的前提 ——
+    /// 一张 4000×6000 扫描件全解是**百毫秒级**(见 `ArchiveIntegrityChecker`
+    /// 文件头那句实测,它正是因为这条才**只读字节不解码**),200 页就是几十秒;
+    /// 降到 256px 长边后单页只需几毫秒,量级差了近百倍。
+    ///
+    /// `kCGImageSourceCreateThumbnailWithTransform = true`:顺带应用 EXIF 方向,
+    /// 手机拍的「照片归档」不这么做会横竖颠倒 —— 与 QuickLook 扩展同一口径。
+    ///
+    /// `kCGImageSourceShouldCacheImmediately = true`:强制在**本任务**完成位图解码。
+    /// 少了它会拖到网格首次绘制时在主线程解,一屏几十个格子必然掉帧
+    /// —— 与全分辨率 `decode` 同款理由(见那里的注释)。
+    ///
+    /// 失败(非图片/损坏/加密内容)→ `ArchiveError.corrupted`,与 `decode` 一致:
+    /// 调用方对这两种失败的处理是同一件事(这一页没有缩略图)
+    static func decodeThumbnail(_ data: Data, maxPixel: CGFloat) throws -> CGImage {
+        let options = [
+            kCGImageSourceShouldCache: false,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+        ] as CFDictionary
+
+        guard let source = CGImageSourceCreateWithData(data as CFData, options),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options) else {
             throw ArchiveError.corrupted
         }
         return image

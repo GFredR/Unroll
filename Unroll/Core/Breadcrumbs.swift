@@ -65,6 +65,12 @@ enum BreadcrumbEvent: Equatable, Sendable {
     case integrityCheckStarted(pages: Int)
     /// 完整性检查结束:坏页数 + 是否过早收工(full / early)
     case integrityCheckFinished(damaged: Int, stoppedEarly: Bool)
+    /// 缩略图网格开始生成(v1.1,2026-09-18)。只记总页数 ——
+    /// 和完整性检查一样是「用户主动触发的重活」,崩在它里面时这是唯一线索
+    case gridBuildStarted(pages: Int)
+    /// 缩略图网格生成结束:成功张数 + 停止原因(full / budget / cancelled / stalled)。
+    /// **不记页号也不记文件名** —— 诊断只需要知道「建到哪、为什么停」
+    case gridBuildFinished(generated: Int, stop: String)
 
     var name: String {
         switch self {
@@ -88,6 +94,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .passphraseAttempt: return "passphraseAttempt"
         case .integrityCheckStarted: return "integrityCheckStarted"
         case .integrityCheckFinished: return "integrityCheckFinished"
+        case .gridBuildStarted: return "gridBuildStarted"
+        case .gridBuildFinished: return "gridBuildFinished"
         }
     }
 
@@ -133,6 +141,12 @@ enum BreadcrumbEvent: Equatable, Sendable {
             return String(pages)
         case .integrityCheckFinished(let damaged, let stoppedEarly):
             return "\(damaged):\(stoppedEarly ? "early" : "full")"
+        case .gridBuildStarted(let pages):
+            return String(pages)
+        case .gridBuildFinished(let generated, let stop):
+            // stop 是 PageGridStop.token 出来的固定枚举标签(full/budget/cancelled/stalled),
+            // 不是用户输入 —— 与 layoutChanged 同一性质
+            return "\(generated):\(stop)"
         }
     }
 }

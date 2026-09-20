@@ -180,3 +180,28 @@
 
 /* 加密页跳过提示(不是损坏) */
 "integrity.skipped" = "另有 %ld 页因为加密被跳过。输入解压密码后再检查，可以把它们一并算进来。";
+
+/* ============ v1.1:「缩略图网格」+ 跳页预览(2026-09-18) ============ */
+
+/* 视图菜单(⇧⌘G 取 Grid 的联想键;⌥⌘G 已给「跳转到页」)。
+   两项刻意相邻 —— 一个是「我知道页号,直接去」,一个是「我看看有什么,再点」 */
+"app.menu.thumbnailGrid" = "缩略图网格…";
+
+/* 网格面板 */
+"reader.grid.title" = "缩略图网格（共 %ld 页）";
+"reader.grid.building" = "正在生成缩略图… %ld / %ld";
+"reader.grid.generated" = "已生成 %ld / %ld 张";
+"reader.grid.hint" = "点任意一页即可跳过去。";
+"reader.grid.cellHint" = "跳到第 %ld 页";
+"reader.grid.done" = "完成";
+"reader.grid.stop" = "停止";
+"reader.grid.regenerate" = "重新生成";
+
+/* 四种停止原因分开说 —— 合成一句必然要说谎 */
+"reader.grid.budgetReached" = "已达到内存上限，后面的页不再生成缩略图（仍可点击跳转）。";
+"reader.grid.cancelled" = "已停止生成，已经生成的部分照常可用。";
+"reader.grid.stalled" = "这个压缩包坏得比较严重，扫描提前停在了中途。";
+
+/* 漏页的两种情况(都不是损坏,但都不能不说) */
+"reader.grid.skippedEncrypted" = "另有 %ld 页因为加密没有缩略图。输入解压密码后重新生成即可补上。";
+"reader.grid.failed" = "有 %ld 页读不出来，没有缩略图。";

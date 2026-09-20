@@ -93,6 +93,18 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .option])
     }
 
+    /// 缩略图网格(⇧⌘G,v1.1 2026-09-18)。取「Grid」的联想键 ——
+    /// ⌥⌘G 已给「跳转到页」,两者是一对(知道页号去 / 看看有什么再点)。
+    /// 它只在阅读态可用(disabled),但 keyEquivalent 与 disabled 无关 ——
+    /// 断言的正是「这一项被正确注册进了菜单」
+    func testViewMenuCarriesThumbnailGridWithShiftCommandG() throws {
+        _ = try requireMenu()
+        let title = L10n.tr("app.menu.thumbnailGrid")
+        let item = try XCTUnwrap(menuItem(titled: title), "菜单里找不到「\(title)」")
+        XCTAssertEqual(item.keyEquivalent, "g")
+        XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
+    }
+
     // MARK: - 既有命令不许在重构里掉队
 
     /// M3 验收标准「纯键盘可完成全部操作」的可执行版本:逐个点名常用命令
@@ -104,6 +116,7 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.coverAlone",
             "reader.direction.ltr", "reader.direction.rtl",
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
+            "app.menu.thumbnailGrid",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.addBookmark", "app.menu.previousBookmark", "app.menu.nextBookmark",
             "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
@@ -123,6 +136,7 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.open", "reader.layout.single", "reader.layout.dual",
             "reader.direction.ltr", "reader.direction.rtl",
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
+            "app.menu.thumbnailGrid",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.nextBookmark", "app.menu.previousBookmark",
             "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",

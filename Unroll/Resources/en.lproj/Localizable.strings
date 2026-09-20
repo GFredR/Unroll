@@ -180,3 +180,29 @@
 
 /* Encrypted pages skipped (not damage) */
 "integrity.skipped" = "%ld pages were skipped because they are encrypted. Enter the archive password and run the check again to include them.";
+
+/* ============ v1.1: "Thumbnail Grid" + jump preview (2026-09-18) ============ */
+
+/* View menu (⇧⌘G, the mnemonic for Grid; ⌥⌘G already belongs to "Go to Page").
+   The two are deliberately adjacent — one is "I know the page number", the other
+   is "show me what's in here" */
+"app.menu.thumbnailGrid" = "Thumbnail Grid…";
+
+/* Grid panel */
+"reader.grid.title" = "Thumbnail Grid (%ld pages)";
+"reader.grid.building" = "Generating thumbnails… %ld / %ld";
+"reader.grid.generated" = "%ld of %ld generated";
+"reader.grid.hint" = "Click any page to jump to it.";
+"reader.grid.cellHint" = "Go to page %ld";
+"reader.grid.done" = "Done";
+"reader.grid.stop" = "Stop";
+"reader.grid.regenerate" = "Regenerate";
+
+/* Four stop reasons, stated separately — folding them into one sentence would lie */
+"reader.grid.budgetReached" = "Memory limit reached — later pages keep their page numbers instead of thumbnails (they are still clickable).";
+"reader.grid.cancelled" = "Generation stopped — what was generated so far is still usable.";
+"reader.grid.stalled" = "This archive is badly damaged; the scan stopped partway through.";
+
+/* The two ways a page can be missing a thumbnail (neither is damage, both must be said) */
+"reader.grid.skippedEncrypted" = "%ld encrypted pages have no thumbnail. Unlock with a password and regenerate to fill them in.";
+"reader.grid.failed" = "%ld pages could not be read and have no thumbnail.";

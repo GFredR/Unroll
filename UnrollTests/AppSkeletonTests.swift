@@ -40,4 +40,36 @@ final class AppSkeletonTests: XCTestCase {
         XCTAssertLessThan(DesignSystem.PageBudget.maxThumbnailPixels,
                           DesignSystem.PageBudget.maxPixels / 4)
     }
+
+    func testGridThumbnailBudgetIsNotJustACount() {
+        // v1.1 网格缩略图池(第三个池)。同一个教训第三次出现:
+        // 2026-09-17 修的是「Trimmed 池只限张数」,本池若照抄个数上限等于没限 ——
+        // 单张像素随长宽比浮动,而 `gridThumbnailLongEdge` 卡的是**长边**。
+        // 这里只锁不变量、不锁数字(数字会随手感调,不变量不该跟着动)。
+        typealias Budget = DesignSystem.PageBudget
+        let worstCasePage = Int(Budget.gridThumbnailLongEdge * Budget.gridThumbnailLongEdge)
+
+        // ① 对**最坏页型(正方形)**像素上限必须**先**到顶。否则像素预算是摆设,
+        //    个数上限会一路放行到 600 × 最坏单张 ≈ 39 Mpx —— 悄悄涨成全分辨率池的三分之一
+        XCTAssertLessThan(Budget.maxGridThumbnailPixels / worstCasePage,
+                          Budget.maxGridThumbnails)
+
+        // ② 反过来,对**细长页(约 1:3)**个数上限必须**先**到顶,否则个数上限是死代码。
+        //    两个方向都要留:只留个数漏掉更贵的方页,只留像素漏掉更省的细长页
+        let slenderPage = Int(Budget.gridThumbnailLongEdge / 3) * Int(Budget.gridThumbnailLongEdge)
+        XCTAssertLessThan(Budget.maxGridThumbnails * slenderPage, Budget.maxGridThumbnailPixels)
+
+        // ③ 第三池与降级池**差一个数量级**(单张长边小 4 倍以上、张数多一个量级)——
+        //    这正是「不能共用一个池」的理由:共用必然互相挤爆
+        XCTAssertLessThanOrEqual(Budget.gridThumbnailLongEdge * 4, Budget.thumbnailLongEdge)
+        XCTAssertGreaterThan(Budget.maxGridThumbnails, Budget.maxThumbnails * 4)
+
+        // ④ 网格池不能长成第二个大池子(与全分辨率池的关系)
+        XCTAssertLessThan(Budget.maxGridThumbnailPixels, Budget.maxPixels / 4)
+
+        // ⑤ 跳转预览长边夹在中间:比网格格子大(要能认清是不是这一页)、
+        //    比降级图小(它只是"确认一下",不进任何池子)
+        XCTAssertGreaterThan(Budget.jumpPreviewLongEdge, Budget.gridThumbnailLongEdge)
+        XCTAssertLessThan(Budget.jumpPreviewLongEdge, Budget.thumbnailLongEdge)
+    }
 }

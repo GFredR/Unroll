@@ -77,6 +77,14 @@ struct ReaderView: View {
                                     set: { if !$0 { viewModel.dismissIntegrity() } })) {
             IntegritySheet(viewModel: viewModel)
         }
+        // 缩略图网格(v1.1,⇧⌘G)。同样用自定义 Binding:用户按 Esc / 点外面关掉时,
+        // SwiftUI 只会把标志置 false —— 那样**生成任务会一直跑下去**,
+        // 而界面已经看不见它了(白烧 CPU 又占着磁盘)。统一交给 dismissGrid(),
+        // 它顺带停任务
+        .sheet(isPresented: Binding(get: { viewModel.isGridSheetPresented },
+                                    set: { if !$0 { viewModel.dismissGrid() } })) {
+            PageGridSheet(viewModel: viewModel)
+        }
     }
 }
 
@@ -435,8 +443,11 @@ private struct ReaderCanvas: View {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // 面板(页码跳转)打开时让位:空格/方向键必须能正常进输入框
-            guard !viewModel.isJumpSheetPresented else { return event }
+            // 面板(页码跳转 / 缩略图网格)打开时让位:空格/方向键必须能正常进输入框,
+            // 也必须能用来滚网格 —— 少了网格这一项,按空格会在**网格底下**翻页,
+            // 用户看到的是"网格里空格键没反应,关掉发现在别处翻了好几页"
+            guard !viewModel.isJumpSheetPresented,
+                  !viewModel.isGridSheetPresented else { return event }
             // 带修饰键的按键(⌘O / ⌘W / 快捷键系统)一律放行,绝不拦截
             guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
                 return event
@@ -489,8 +500,10 @@ private struct ReaderCanvas: View {
     private func installScrollMonitor() {
         guard scrollMonitor == nil else { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            // 面板打开时让位(滚轮不翻页)
-            guard !viewModel.isJumpSheetPresented else { return event }
+            // 面板打开时让位(滚轮不翻页)。**网格这一项尤其重要**:
+            // 网格是靠滚轮浏览的,不拦截的话滚一下既滚了网格又翻了底下的页
+            guard !viewModel.isJumpSheetPresented,
+                  !viewModel.isGridSheetPresented else { return event }
             guard zoom * pinchScale <= 1 else { return event }
             let now = Date()
             guard now.timeIntervalSince(lastWheelPageAt) > 0.3 else { return event }
@@ -518,15 +531,26 @@ private struct ReaderCanvas: View {
     }
 }
 
-// MARK: - 页码跳转面板(⌥⌘G,2026-09-15)
+// MARK: - 页码跳转面板(⌥⌘G,2026-09-15;目标页预览 v1.1 2026-09-18)
 
 /// 输入 1-based 页码直接跳页。解析与夹紧全在 VM 的 `parsePageInput`(纯函数,可单测),
 /// 本视图只负责输入与错误提示 —— 面板不持页码状态,关掉即无副作用。
+///
+/// **目标页预览(v1.1)**:输入停顿后显示那一页的小图,回答「我要去的是不是这一页」。
+/// 此前这个面板只有一句「共 200 页」,用户凭记忆输数字,跳过去发现不对再翻回来 ——
+/// 预览把这次往返省掉了。
+///
+/// 防抖(300ms)刻意放在**视图侧**:它是「打字节奏」这种界面感受,不是业务规则;
+/// VM 的 `previewJumpTarget` 因此可以被单测直接调,不用等时间。
+/// 每停顿一次就是一次真实读取(包里的一次定位 + 一次降采样解码),
+/// 于是**必须防抖** —— 否则输「128」会连读三次。
 private struct PageJumpSheet: View {
 
     @ObservedObject var viewModel: ReaderViewModel
     @State private var text = ""
     @FocusState private var isFocused: Bool
+    /// 防抖任务(输入每变一次就取消重排)
+    @State private var debounce: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignSystem.Spacing.md) {
@@ -550,6 +574,8 @@ private struct PageJumpSheet: View {
                     .foregroundStyle(DesignSystem.Palette.brand)
             }
 
+            preview
+
             HStack(spacing: DesignSystem.Spacing.sm) {
                 Spacer()
                 Button(L10n.tr("reader.jump.cancel")) {
@@ -562,16 +588,83 @@ private struct PageJumpSheet: View {
             }
         }
         .padding(DesignSystem.Spacing.lg)
-        .frame(minWidth: 280)
+        .frame(minWidth: 320)
         .onAppear {
             text = "\(viewModel.pageIndex + 1)"   // 预填当前页,改一位数字即可
             isFocused = true
+            schedulePreview()                     // 预填的那一页也先给张图
         }
+        .onDisappear {
+            debounce?.cancel()
+            // 预览是**瞬态**的(只有这一张,不进任何池子)—— 面板走时必须还回去,
+            // 否则它成了唯一一处「关掉面板还占着内存」的地方
+            viewModel.clearJumpPreview()
+        }
+        .onChange(of: text) { _, _ in schedulePreview() }
+    }
+
+    // MARK: 预览
+
+    /// 预览区。**三态各有各的样子**:加载中(转圈)、可看(图)、取不出来(说明)。
+    /// 取不出来时必须说原因 —— 转圈转到天荒地老会被当成"卡住了"
+    @ViewBuilder
+    private var preview: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: DesignSystem.Radius.card)
+                .fill(Color(nsColor: .quaternaryLabelColor).opacity(0.28))
+
+            if let failure = viewModel.jumpPreviewFailure {
+                VStack(spacing: DesignSystem.Spacing.xs) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .accessibilityHidden(true)
+                    Text(L10n.tr(failure.titleKey))
+                        .font(.system(size: DesignSystem.Typography.footnote, weight: .medium))
+                    if let bodyKey = failure.bodyKey {
+                        Text(failure.bodyArg.map { L10n.tr(bodyKey, $0) } ?? L10n.tr(bodyKey))
+                            .font(.system(size: DesignSystem.Typography.footnote))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .foregroundStyle(.secondary)
+                .padding(DesignSystem.Spacing.sm)
+            } else if let image = viewModel.jumpPreview,
+                      viewModel.jumpPreviewPage == pageIndex {
+                // 配对断言:`jumpPreviewPage == pageIndex` 才显示。快速改输入时
+                // 旧图可能比新图晚到,少了这个判断会短暂显示**错误页**的预览 ——
+                // 而这个面板的全部价值就在于「看一眼确认是哪一页」,
+                // 显示出错页比什么都不显示更糟
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .padding(DesignSystem.Spacing.xs)
+            } else if viewModel.isJumpPreviewLoading {
+                ProgressView()
+                    .controlSize(.small)
+            }
+        }
+        .frame(height: 200)
+        .frame(maxWidth: .infinity)
     }
 
     /// 解析结果(0-based);非法 → nil
     private var pageIndex: Int? {
         ReaderViewModel.parsePageInput(text, pageCount: viewModel.pageCount)
+    }
+
+    /// 输入停顿 300ms 后再取预览。**非法输入直接清掉预览** ——
+    /// 留着上一张会让「输了一半的页码」看起来像已经确认过了
+    private func schedulePreview() {
+        debounce?.cancel()
+        guard let index = pageIndex else {
+            viewModel.clearJumpPreview()
+            return
+        }
+        debounce = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            viewModel.previewJumpTarget(index)
+        }
     }
 
     private func submit() {

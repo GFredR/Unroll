@@ -298,6 +298,181 @@ final class ReaderViewModel: ObservableObject {
         integrity = nil
     }
 
+    // MARK: - 缩略图网格(v1.1,2026-09-18)
+
+    /// 网格生成状态。形状与 `integrity` 同源(building/终态报告),
+    /// 但多一层考虑:`building` 里带进度,是因为网格的**生成过程本身可见** ——
+    /// 用户盯着面板看缩略图一张张出来,进度条告诉他「快好了」还是「别等了」
+    @Published private(set) var grid: GridState?
+
+    /// 网格面板的显隐。与 `grid` 分开的理由同 `isIntegritySheetPresented`:
+    /// 面板开合是**视图状态**,而生成状态要被测试直接断言
+    @Published var isGridSheetPresented = false
+
+    enum GridState: Equatable {
+        case building(done: Int, total: Int)
+        /// 结束(结果见 `PageGridReport`)。**取消也算结束** ——
+        /// 报告里带着 `.cancelled`,界面据此说「已停止 · 已生成 N 张」,
+        /// 比「没有结果」有用得多
+        case ready(PageGridReport)
+    }
+
+    /// 网格缩略图池。**跨面板开合保留** —— 重建一次要顺序扫全档
+    /// (solid 7z 上是秒级),而缩略图**不会过期**:归档在打开期间不可变,
+    /// 重扫只会得到一模一样的结果。真正的释放点是换书 / 关窗(见 `open` 与 teardown)。
+    /// 上界由 `DesignSystem.PageBudget` 的两个网格预算钉住
+    ///
+    /// **每一轮生成新建一个池子**(而不是清空复用):后台扫描是同步写入的,
+    /// 换书时旧扫描可能还在跑 —— 它继续写它那一轮创建出来的池子,
+    /// 而 VM 已经指向新池子,污染不到。代次隔离靠**对象身份**,不靠标志位
+    private var gridThumbs = ThumbnailStore()
+
+    /// 上一次生成完成的报告。与池子同寿命 —— 有它就说明「池子里的东西是完整的」,
+    /// 于是重开面板可以直接显示,不必重扫
+    private var lastGridReport: PageGridReport?
+
+    private var gridBuildTask: Task<Void, Never>?
+
+    /// 「这一轮生成」的代号。理由与 `integrityGeneration` 完全一致:
+    /// Task 的取消是**协作式**的,`cancel()` 之后后台那个同步 C 循环还要跑到
+    /// 下一个检查点才发现。在它发现之前用户可能已经换了书 —— 那一刻收尾照常
+    /// 执行,把**旧包的缩略图**塞进**新包的池子**。取消标志管「别白干活」,
+    /// 代号管「别写错地方」,两件事
+    private var gridGeneration = 0
+
+    /// 菜单可用性:只有正在阅读一份真实文档时才谈得上生成它的缩略图
+    var canShowGrid: Bool {
+        phase == .reading && document != nil && pageCount > 0
+    }
+
+    /// 是否正在生成(面板据此把「停止」按钮画出来)
+    var isGridBuilding: Bool {
+        if case .building = grid { return true }
+        return false
+    }
+
+    /// 打开网格面板。已有现成结果 → **直接显示,不重扫**(见 `lastGridReport`);
+    /// 否则开始生成。返回本次生成任务(已有结果时为 nil)
+    @discardableResult
+    func showGrid() -> Task<Void, Never>? {
+        guard canShowGrid else { return nil }
+        isGridSheetPresented = true
+        if let report = lastGridReport {
+            grid = .ready(report)
+            return nil
+        }
+        return buildGrid()
+    }
+
+    /// 重新生成(面板上的「重新生成」)。**丢弃现成的重扫一遍** ——
+    /// 与「打开面板」分开,是因为两者的语义不同:打开是「给我看」,
+    /// 重新生成是「我不信这份,重做」。混成一个动作会让「打开很快」
+    /// 这件事变得不可预期
+    @discardableResult
+    func rebuildGrid() -> Task<Void, Never>? {
+        lastGridReport = nil
+        gridThumbs = ThumbnailStore()   // 丢弃旧池子(后台旧扫描写的是它,污染不到新的)
+        return buildGrid()
+    }
+
+    /// 开始生成。重复触发 = 重新开始
+    ///
+    /// 返回本次生成任务(与 `checkIntegrity()` 同一套路):UI 忽略返回值,
+    /// 测试可以 await 等状态机落定 —— 否则「等生成跑完」只能靠 sleep 猜时间
+    @discardableResult
+    func buildGrid() -> Task<Void, Never>? {
+        guard canShowGrid, let document else { return nil }
+        gridBuildTask?.cancel()
+
+        let total = document.entries.count
+        gridGeneration += 1
+        let generation = gridGeneration
+        // 本轮独占的池子:后台扫描**同步**写它,所以下面 `await task.value`
+        // 返回时它已经填满 —— 不留「生成完成但图还没到」的时间窗。
+        // 换一轮生成就换一个对象,旧扫描继续写旧对象(无害)
+        let pool = ThumbnailStore()
+        gridThumbs = pool
+        grid = .building(done: 0, total: total)
+        isGridSheetPresented = true
+        Breadcrumbs.shared.record(.gridBuildStarted(pages: total))
+
+        let maxPixel = DesignSystem.PageBudget.gridThumbnailLongEdge
+        let budget = PageGridBudget.default
+
+        // ⚠️ 闭包结构照抄 `checkIntegrity`(那里写错过一次,注释也留在那):
+        // 外层 `Task.detached` 先 `[weak self]` + 一次 `guard let vm = self`,
+        // 之后内外两层回调都只用这个**局部强引用 vm**。不要在里层再写
+        // `[weak self]` —— 那会去捕获外层已被弱化的 self,编译期直接报
+        // "reference to captured var 'self' in concurrently-executing code"
+        let task = Task.detached(priority: .utility) { [weak self] in
+            guard let vm = self else { return }
+
+            let report = PageGridBuilder.build(
+                document: document,
+                maxPixel: maxPixel,
+                budget: budget,
+                // `Task.isCancelled` 在这里读到的是**本 detached 任务**的取消状态
+                // (闭包在它的线程上被同步调用)—— 于是 VM 的 cancel 能穿进扫描循环
+                isCancelled: { Task.isCancelled },
+                // **同步写池子**(不跳主线程):池子自带锁,扫描线程是它的合法写者。
+                // 每张图回跳一次主线程的写法会凭空造 500 个任务,还会让
+                // 「生成完成」与「图画得出来」之间隔出一个没人能断言的时间窗
+                onThumbnail: { page, image in
+                    pool.store(image, at: page)
+                },
+                onProgress: { done in
+                    // 进度要回主线程(它是 @Published 状态),但**每 progressStride 页才一次**
+                    // ——逐页回跳是另一个"500 个任务"的来源
+                    Task { @MainActor in
+                        guard vm.gridGeneration == generation,
+                              case .building = vm.grid else { return }
+                        vm.grid = .building(done: done, total: total)
+                    }
+                })
+
+            await MainActor.run {
+                // 代号守卫:取消是协作式的,cancel() 之后后台循环可能还要跑一会儿。
+                // 若这期间用户换了书,这一轮的缩略图已经**不属于**当前文档了
+                guard vm.gridGeneration == generation else { return }
+                vm.lastGridReport = report
+                // 面板可能已经被关掉了(关面板会 cancel 本轮)——
+                // 那就只留报告,不往 `grid` 写一个没人看的终态
+                if vm.isGridSheetPresented {
+                    vm.grid = .ready(report)
+                }
+                vm.gridBuildTask = nil
+                Breadcrumbs.shared.record(.gridBuildFinished(generated: report.generated,
+                                                             stop: report.stop.token))
+            }
+        }
+        gridBuildTask = task
+        return task
+    }
+
+    /// 中断生成(面板上的「停止」)。**保留已生成的缩略图** ——
+    /// 报告会带 `.cancelled`,不是「白干了」
+    func cancelGridBuild() {
+        gridBuildTask?.cancel()
+    }
+
+    /// 关掉网格面板。**池子与报告留着**(见 `gridThumbs` 的说明)——
+    /// 真正的释放点是换书 / 关窗。这里只清视图状态
+    ///
+    /// 生成中关面板会**停掉生成**:不可见的重活不该继续烧 CPU 与磁盘
+    /// (与 `dismissIntegrity` 同款判断)。已生成的部分留在池子里,
+    /// 重开面板即见,想接着做得点「重新生成」
+    func dismissGrid() {
+        gridBuildTask?.cancel()
+        isGridSheetPresented = false
+        grid = nil
+    }
+
+    /// 取某页缩略图(nil = 还没生成到它 / 该页没有缩略图)。
+    /// 纯查询,不触发任何工作 —— 网格滚动时每帧都会调它
+    func gridThumbnail(at index: Int) -> CGImage? {
+        gridThumbs.image(at: index)
+    }
+
     /// 存储可注入(单测用隔离 suite)
     init(progressStore: ReadingProgress = ReadingProgress(),
          bookmarkStore: Bookmarks = Bookmarks()) {
@@ -333,6 +508,19 @@ final class ReaderViewModel: ObservableObject {
         integrity = nil
         // 面板也要关:旧包的结论留在屏幕上,用户会以为说的是刚打开这本
         isIntegritySheetPresented = false
+        // 缩略图网格(v1.1):这是网格池**唯一**的释放点(关面板不清池子,
+        // 见 `gridThumbs` 的说明)。同时代号 +1 —— 取消是协作式的,
+        // 旧包的扫描循环可能还在后台跑,代号让它认不出自己已经作废,
+        // 于是不会把旧包的缩略图塞进新书的池子
+        gridBuildTask?.cancel()
+        gridBuildTask = nil
+        gridGeneration += 1
+        lastGridReport = nil
+        gridThumbs = ThumbnailStore()   // 换池子(对象身份即代次隔离,见 gridThumbs 说明)
+        grid = nil
+        isGridSheetPresented = false
+        // 跳页预览同理:上一本书的预览图留在面板里是最容易发生的"张冠李戴"
+        clearJumpPreview()
         let oldStore = store
         store = nil
         document = nil
@@ -556,6 +744,17 @@ final class ReaderViewModel: ObservableObject {
             integrityGeneration += 1
             integrity = nil
             isIntegritySheetPresented = false
+            // 网格同理:解锁前的池子里,加密页是**永久空白**(不是"还没扫到")。
+            // 留着它,用户会以为那几页本来就没有缩略图 —— 其实只要重新生成就有。
+            // 换的是 document,所以池子与报告一起作废
+            gridBuildTask?.cancel()
+            gridBuildTask = nil
+            gridGeneration += 1
+            lastGridReport = nil
+            gridThumbs = ThumbnailStore()
+            grid = nil
+            isGridSheetPresented = false
+            clearJumpPreview()
             Breadcrumbs.shared.record(.passphraseAttempt(success: true))
             await oldStore?.teardown()
 
@@ -813,6 +1012,99 @@ final class ReaderViewModel: ObservableObject {
         let normalized = trimmed.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? trimmed
         guard let number = Int(normalized), number >= 1, number <= pageCount else { return nil }
         return number - 1
+    }
+
+    // MARK: - 跳页面板的目标页预览(v1.1,2026-09-18)
+
+    /// 面板里那张目标页预览。nil = 还没取到(加载中 / 该页取不出来)
+    @Published private(set) var jumpPreview: CGImage?
+    /// 预览对应的页(0 起)。与 `jumpPreview` **配对**断言 ——
+    /// 快速改输入时旧图可能比新图晚到,只有配对才判得出「这张是哪一页的」
+    @Published private(set) var jumpPreviewPage: Int?
+    /// 预览是否在取(界面显示小转圈)。**必须由 VM 说** ——
+    /// 让 View 自己猜「输入变了但图还是旧的」会把同一件事的判断散到两处
+    @Published private(set) var isJumpPreviewLoading = false
+    /// 取不出来时的原因(加密 / 读不出)。**复用页级失败那套 key**,
+    /// 不另造一套文案 —— 用户看到的是同一件事(这一页读不出来)
+    @Published private(set) var jumpPreviewFailure: Failure?
+
+    private var jumpPreviewTask: Task<Void, Never>?
+    /// 代号守卫(与完整性检查、网格同一套):取消是协作式的,
+    /// 迟到的预览不得覆盖新输入的结果
+    private var jumpPreviewGeneration = 0
+
+    /// 为某页取一张预览图(页码 0 起)。
+    ///
+    /// **防抖刻意放在 View 侧** —— 防抖长度是「打字节奏」这种界面感受,
+    /// 不是业务规则;本方法只管「给我第 N 页的预览」,于是可被单测直接调用。
+    ///
+    /// 取值**优先走网格池**:已经生成过就直接命中,零 I/O —— 这是
+    /// 「先开了网格再跳页」这条常见路径的白拿收益。池子没有才真去读一页。
+    ///
+    /// 返回本次取图任务(与 `open` / `checkIntegrity` 同一约定):UI 忽略返回值,
+    /// 测试可以 await 等状态落定。**池子命中时返回 nil** —— 那是同步完成的,
+    /// 没有任务可等,而这一点本身也值得被断言(命中就不该产生任何异步工作)
+    @discardableResult
+    func previewJumpTarget(_ index: Int) -> Task<Void, Never>? {
+        guard phase == .reading, let store, pageCount > 0 else { return nil }
+        let clamped = min(max(index, 0), pageCount - 1)
+
+        // 同一页重复请求直接吃掉:防抖后仍可能连点,而每次请求在包里都是
+        // 一次真实读取 —— 去重比让它们排队便宜得多
+        if jumpPreviewPage == clamped, jumpPreview != nil || isJumpPreviewLoading {
+            return nil
+        }
+
+        jumpPreviewTask?.cancel()
+        jumpPreviewGeneration += 1
+        let generation = jumpPreviewGeneration
+
+        // 池子命中:同步返回,连转圈都不该闪一下
+        if let cached = gridThumbs.image(at: clamped) {
+            jumpPreview = cached
+            jumpPreviewPage = clamped
+            jumpPreviewFailure = nil
+            isJumpPreviewLoading = false
+            return nil
+        }
+
+        jumpPreviewFailure = nil
+        isJumpPreviewLoading = true
+        let maxPixel = DesignSystem.PageBudget.jumpPreviewLongEdge
+
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let outcome: Result<CGImage, Error>
+            do {
+                outcome = .success(try await store.previewImage(at: clamped, maxPixel: maxPixel))
+            } catch {
+                outcome = .failure(error)
+            }
+            // 取消 / 过期一律丢弃:用户已经改了输入,这张图不再是他要的
+            guard !Task.isCancelled, self.jumpPreviewGeneration == generation else { return }
+            switch outcome {
+            case .success(let image):
+                self.jumpPreview = image
+                self.jumpPreviewFailure = nil
+            case .failure(let error):
+                self.jumpPreview = nil
+                self.jumpPreviewFailure = self.pageFailure(for: error as? ArchiveError ?? .corrupted)
+            }
+            self.jumpPreviewPage = clamped
+            self.isJumpPreviewLoading = false
+        }
+        jumpPreviewTask = task
+        return task
+    }
+
+    /// 清掉预览(面板关闭时调)。**不清池子** —— 池子归网格管,寿命不同
+    func clearJumpPreview() {
+        jumpPreviewTask?.cancel()
+        jumpPreviewGeneration += 1
+        jumpPreview = nil
+        jumpPreviewPage = nil
+        jumpPreviewFailure = nil
+        isJumpPreviewLoading = false
     }
 
     // MARK: - 错误 → 文案 key(§5.9.3.1 分流)

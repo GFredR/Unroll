@@ -169,6 +169,15 @@ struct UnrollApp: App {
                 }
                 .keyboardShortcut("g", modifiers: [.command, .option])
                 .disabled(reader.phase != .reading)
+                // 缩略图网格(v1.1,2026-09-18)。取「Grid」的联想键 ⇧⌘G ——
+                // ⌥⌘G 已被页码跳转占用,而这两项恰好是一对:
+                // 一个是「我知道页号,直接去」,一个是「我看看有什么,再点」。
+                // 放相邻位置,是因为用户找其中一个时往往需要另一个
+                Button(L10n.tr("app.menu.thumbnailGrid")) {
+                    reader.showGrid()
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(!reader.canShowGrid)
                 Divider()
                 // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上
                 Button(L10n.tr("reader.fit.window")) {
