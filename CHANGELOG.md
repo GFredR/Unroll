@@ -1,6 +1,8 @@
 # Changelog
 
-## 未发布 / Unreleased
+## 1.1.0 — 2026-09-21 · 首次公开发布 / First public release
+
+**首次公开发布。** 它包含 1.0.x 那条线的全部内容（下面各段），外加本版新落地的三项——缩略图网格、跳转面板就地预览、连续滚动——以及滚动模式带出来的一个横向裁切修复。
 
 **中文**
 - **连续滚动**（`⌘0`）——竖向一列，一页接一页。滚动位置与页码是**同一份状态**：视口驱动页码、跳页也带动视口，两者不可能对不上；只有视口附近的几行保留全分辨率图，出窗的行主动交还像素，这才是长距离滚动仍守在内存预算内的原因。缩放四档与「封面单独一页」描述的是「摊怎么放进窗口」，在滚动模式下会一并灰掉
@@ -20,9 +22,9 @@
 - New "View → Thumbnail grid" menu item. The panel can **stop** generation at any time and **regenerate** on demand; opening another archive or regenerating discards the previous batch.
 - Progress and the four stop reasons (finished / memory ceiling / cancelled by you / archive unreadable) are reported **separately** — collapsing them into one message would have to lie about at least one.
 
-## 1.0.1 — 2026-09-17 · 首个公开发布 / First public release
+## 1.0.1 — 2026-09-17 · 本机里程碑，从未对外发布 / Local milestone, never published
 
-首个公开版本 / First public release.
+冻结 1.0 线核心功能的一个本机里程碑：产物与 tag 都已打好，**但从未推送过**（仓库当时还没有远程）。对外发布的实际版本是 **1.1.0**，它包含本段全部条目。
 
 **中文**
 - 直接从归档流式读页:cbz / cbr / cb7 / cbt,裸 zip / rar / 7z / tar 同样支持(按内容嗅探,不看扩展名)
@@ -75,4 +77,4 @@
 ## 1.0.0 — 2026-09-15（仅本机打标，从未发布 / tagged locally, never published）
 
 无对外产物：`v1.0.0` 标签指向本机一次更早的构建，当时的产物**不含**「封面单独一页」修正与 QuickLook 扩展。
-**1.0.1 才是第一个对外的版本**，内容为上方全部条目。
+**1.1.0 才是第一个对外的版本**，内容为 1.0.1 的全部条目加上 1.1.0 段的新增项。
