@@ -32,6 +32,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Four zoom modes** — fit window / fit width / fit height / actual size (`⌘3`–`⌘6`), with pinch and double-click zoom layered on top.
 - **Go to page** — `⌥⌘G` jumps to a page number, and shows you a preview of that page as you type, so a typo is visible before you commit to it.
 - **Thumbnail grid** (`⇧⌘G`) — see the whole book at once and click any cell to jump there. Every previous shortcut assumed you already knew where you were going; this is the first one for "which page was that spread on again?". It generates in **one sequential pass** (not "generate whatever you scroll to" — that degrades to quadratic on solid 7z), shows progress, and can be stopped at any time. If it hits the memory ceiling it **says so**, rather than leaving you waiting for pages that will never appear. Opening another archive or regenerating discards the previous batch.
+- **Continuous scroll** (`⌘0`) — one vertical column, page after page, for when you want to *read* rather than page through. The scroll position and the page number are the **same state**: the viewport drives the counter, and jumping to a page moves the viewport, so the two can never disagree. Only the rows near where you are keep full-resolution images — the rest release their pixels, which is what keeps a long scroll inside the memory budget. Zoom modes and cover-alone describe how a *spread* fits the window, so they are disabled here.
 - **Save the current page as an image** (`⌘S`) — writes it out as PNG or JPEG. In two-page mode you get **the whole spread as you see it** (side by side, in your reading direction), not one isolated page.
 - **A draggable progress bar** — the HUD bar scrubs: the page number follows your drag, and it only jumps when you let go (instead of decoding a page for every step).
 - **Page number in the window title** — the title bar reads "file name · P.3/200", so multiple windows and Dock hover tell you where you are. `⇧⌘F` reveals the current file in Finder when you want to move on to the next volume.
@@ -148,6 +149,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | --- | --- |
 | `⌘O` | Open… |
 | `⌘1` / `⌘2` | Single page / two-page spread |
+| `⌘0` | Continuous scroll — one vertical column, page after page |
 | `⌥⌘C` | Cover on its own page (spread pairing) |
 | `⇧⌘L` / `⇧⌘R` | Left-to-right / right-to-left (manga) |
 | `⇧⌘↑` | Back to cover |

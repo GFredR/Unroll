@@ -3,12 +3,18 @@
 ## 未发布 / Unreleased
 
 **中文**
+- **连续滚动**（`⌘0`）——竖向一列，一页接一页。滚动位置与页码是**同一份状态**：视口驱动页码、跳页也带动视口，两者不可能对不上；只有视口附近的几行保留全分辨率图，出窗的行主动交还像素，这才是长距离滚动仍守在内存预算内的原因。缩放四档与「封面单独一页」描述的是「摊怎么放进窗口」，在滚动模式下会一并灰掉
+- 新增「显示 → 连续滚动」菜单项（`⌘0`）
+- **修掉一个肉眼看不见的缺陷**：滚动模式原先按窗口画布宽（900pt）给行定宽，而滚动视图内容区实宽只有 885pt（系统设成「始终显示滚动条」时，macOS 会给传统滚动条留 15pt 占位），于是**页面左右各被裁掉 7.5pt**。改用 `containerRelativeFrame` 认容器实宽，并新增**内容判据**把这条锁住：拿样本页脚自带的进度条（宽度 = 页宽的 n/总页数，是个已知比例）量出的期望值去比对实测值 —— 「铺满」与「铺满但被裁」在肉眼看来逐像素相同，只有换一把有已知位置的尺子才分辨得出来
 - **缩略图网格**（`⇧⌘G`）——一眼看全卷，点任一格直达该页。此前所有快速移动手段（`⌥⌘G` 跳页 / `⌘D` 书签 / `⇧⌘↑↓` 首末页）都假设"你已经知道要去哪"，想找某一页只能一张张翻着认，这是第一个补上这个空缺的功能。三条实现口径值得说明：① **一趟顺序扫完**，不是"滚到哪生成哪"（后者在 solid 7z 上会让一遍滚动退化成平方级）；② 内存到顶即**停止生成**并**明说**"后面的页不会有图"，绝不让你一直等 —— 而不是偷偷淘汰已经生成的页（那会把平方级请回来）；③ 渲染路径**不碰任何 I/O**，滚动永远不会把读盘带进来
 - **跳转面板就地预览**（`⌥⌘G`）——输入页码时就地显示那一页，输错当场看得见，不必先跳过去再退回来。停止输入 300ms 才解码（不会每敲一个字符解一次）；网格里已经有那一页时直接复用，不再解码第二遍
 - 新增「显示 → 缩略图网格」菜单项；网格面板里可随时**停止**生成、也可**重新生成**；换书或重新生成都会作废旧的一批缩略图
 - 网格生成进度与四种停止原因（扫完了 / 内存到顶 / 你叫停的 / 包坏得走不下去）**分别说明** —— 合成一句必然要说谎
 
 **English**
+- **Continuous scroll** (`⌘0`) — one vertical column, page after page. The scroll position and the page number are the **same state** (the viewport drives the counter and a jump moves the viewport), so the two can never disagree. Only the rows near where you are keep full-resolution images; rows leaving the viewport hand their pixels back, which is what keeps a long scroll inside the memory budget. The zoom modes and cover-alone describe how a *spread* fits the window, so they are greyed out here.
+- New "View → Continuous scroll" menu item (`⌘0`).
+- **Fixed a defect you could not have seen.** Rows used to take their width from the window canvas (900 pt) while the scroll view's content area was only 885 pt — with "Always show scroll bars" macOS reserves 15 pt for legacy scrollers — so **every page lost 7.5 pt on each side**. Rows now take the container's real width (`containerRelativeFrame`), and a **content-based guard** locks it in: the fixture's own page-footer progress bar is a known fraction of the page width, so its measured edge is checked against the measured content width. "Fits the width" and "fits the width but is clipped" are pixel-identical by eye; only a ruler at a known position can tell them apart.
 - **Thumbnail grid** (`⇧⌘G`) — see the whole book at a glance and click any cell to jump there. Every earlier shortcut assumed you already knew where you were going; this is the first one that answers "which page was that spread on again?". Three implementation choices worth naming: (1) it generates in **one sequential pass**, not "whatever you scroll to" — the latter degrades to quadratic on solid 7z; (2) hitting the memory ceiling **stops generation and says so** rather than silently evicting pages you already have (which would reintroduce the quadratic cost); (3) the render path does **no I/O at all**, so scrolling never pulls disk reads into drawing.
 - **Preview in the go-to-page panel** (`⌥⌘G`) — typing a page number shows that page in place, so a typo is visible before you commit. Decoding waits 300 ms after you stop typing; if the thumbnail grid already has that page it is reused instead of decoded twice.
 - New "View → Thumbnail grid" menu item. The panel can **stop** generation at any time and **regenerate** on demand; opening another archive or regenerating discards the previous batch.
