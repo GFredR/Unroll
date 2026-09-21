@@ -739,4 +739,148 @@ final class ReaderViewModelTests: XCTestCase {
         XCTAssertEqual(vm.phase, .reading)
         XCTAssertEqual(vm.pageCount, 4)
     }
+
+    // MARK: - 连续滚动(v2 候选池最后一项,2026-09-21)
+
+    /// 滚动是「一行一页」:它与双页互斥,`isSpread` 必须为 false。
+    /// 所有 `SpreadPaging` 调用点都读这个判断 —— 它错了就是在滚动里冒出半个摊
+    func testScrollLayoutIsNotASpread() {
+        typealias Layout = ReaderViewModel.PageLayout
+        XCTAssertFalse(Layout.scroll.isSpread)
+        XCTAssertTrue(Layout.dual.isSpread)
+
+        // 口径落到纯函数上:非摊 → 任意页都没有次页
+        XCTAssertNil(SpreadPaging.secondaryIndex(for: 0, pageCount: 10,
+                                                 dual: Layout.scroll.isSpread,
+                                                 coverAlone: false))
+    }
+
+    /// `rawValue` 往返。它同时是进度存储里那个字段的值,所以第二半同样重要:
+    /// **认不出的值要解析成 nil**,调用方据此保守退回自己的默认值 ——
+    /// 而不是抛错或崩(将来若真加了第四种布局,老版本会安全地不认识它)
+    func testScrollLayoutRawValueRoundTrips() {
+        typealias Layout = ReaderViewModel.PageLayout
+        XCTAssertEqual(Layout(rawValue: "scroll"), .scroll)
+        XCTAssertEqual(Layout.scroll.rawValue, "scroll")
+        XCTAssertNil(Layout(rawValue: "definitely-not-a-layout"))
+    }
+
+    /// 滚动模式下页码由**视口**说了算:写锚点就等于翻页
+    func testScrollAnchorDrivesPageIndex() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .scroll
+        XCTAssertNil(vm.secondaryIndex, "滚动模式没有摊")
+
+        vm.scrollTarget = 2
+        XCTAssertEqual(vm.pageIndex, 2, "视口锚点是滚动模式页码的唯一来源")
+    }
+
+    /// 锚点越界必须夹紧 —— 回填的值来自系统滚动视图,不能假定它合法
+    func testScrollAnchorClampsOutOfRange() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .scroll
+
+        vm.scrollTarget = 999
+        XCTAssertEqual(vm.pageIndex, vm.pageCount - 1)
+
+        vm.scrollTarget = -7
+        XCTAssertEqual(vm.pageIndex, 0)
+    }
+
+    /// 分页模式下锚点是惰性值:写它不许动页码。
+    /// 少了这条守卫,任何「顺手设一下 scrollTarget」的新代码都可能偷偷翻页
+    func testScrollAnchorIsInertOutsideScrollMode() async throws {
+        let vm = try await openFixtureOrSkip()
+        XCTAssertEqual(vm.layout, .single)
+
+        vm.scrollTarget = 2
+        XCTAssertEqual(vm.pageIndex, 0, "分页模式不认视口锚点")
+    }
+
+    /// 滚动模式下的 `goTo` 必须**同时**把视口挪过去。
+    /// 只改 `pageIndex` 的话 HUD 立刻显示新页码、画面却还停在原处 ——
+    /// 用户看到的是「按了 → 数字变了 → 但图没动」
+    func testProgrammaticGoToInScrollModeMovesViewportToo() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .scroll
+
+        vm.goTo(2)
+
+        XCTAssertEqual(vm.scrollTarget, 2, "视口要跟着走")
+        XCTAssertEqual(vm.pageIndex, 2, "页码由锚点回填,同样要对上")
+    }
+
+    /// 滚动模式**不做摊归位**。若它错用了双页那条口径,`goTo(2)` 会落到 1 ——
+    /// 表现是「⌘↓ 跳末页却停在倒数第二页」这类差一页的怪事
+    func testScrollModeDoesNotSnapToSpreadStart() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.coverAlone = true          // 摊首面会把这页归到前一页,便于暴露错误
+        vm.layout = .scroll
+
+        vm.goTo(2)
+
+        XCTAssertEqual(vm.pageIndex, 2, "滚动模式一行一页,不做摊归位")
+    }
+
+    /// 滚动 ⇄ 双页切换:出去时**必须归一**到所属摊的首面。
+    /// 不归一就会出「主图是摊第二面」的错位摊(2026-09-16 修过同一个坑,
+    /// 那次是配对口径写死,这次是模式切换 —— 同一个后果,两条入口)
+    func testSwitchingFromScrollToDualRealignsToSpreadStart() async throws {
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .scroll
+        vm.goTo(1)
+        XCTAssertEqual(vm.pageIndex, 1, "滚动模式下第 2 页就是第 2 页")
+
+        vm.layout = .dual             // 默认配对 (0,1)(2,3)…:第 1 页是摊的**第二面**
+        XCTAssertEqual(vm.pageIndex, 0, "切回双页必须归一到摊首面")
+    }
+
+    /// 续读:滚动模式也随进度恢复。
+    ///
+    /// 它**复用 `layout` 字段**,没有新增存储字段 —— 于是「老记录缺字段」那一类
+    /// 兼容性风险一次都没被碰过(`ReadingProgress.Entry` 的 Optional 字段是
+    /// 踩过坑的地方:`coverAlone` 当年非可选,老记录解成空字典,**进度全丢**)
+    func testResumeRestoresScrollMode() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+
+        let first = makeViewModel()
+        await first.open(url: url).value
+        guard case .reading = first.phase else {
+            return XCTFail("首次打开应进入 reading")
+        }
+        first.layout = .scroll
+        first.scrollTarget = 2
+
+        let second = makeViewModel(reuseProgress: true)
+        await second.open(url: url).value
+        guard case .reading = second.phase else {
+            return XCTFail("重开应进入 reading")
+        }
+        XCTAssertEqual(second.layout, .scroll)
+        XCTAssertEqual(second.pageIndex, 2)
+        XCTAssertEqual(second.scrollTarget, 2,
+                       "恢复时视口也要对齐 —— 少了它,页码是第 2 页、画面却从第 1 页开始滚")
+    }
+
+    /// 换书必须把上一本的滚动视角一起清掉。
+    /// 不清的话新书第一帧会先滚到旧书的页码再弹回来(新书页数更少时还会被夹到末页)
+    func testReopenResetsScrollTarget() async throws {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        let vm = try await openFixtureOrSkip()
+        vm.layout = .scroll
+        vm.scrollTarget = 2
+        XCTAssertEqual(vm.scrollTarget, 2)
+
+        vm.clearProgress()            // 抹掉续读记录 → 重开应从第 0 页开始
+        await vm.open(url: url).value
+
+        XCTAssertEqual(vm.pageIndex, 0)
+        XCTAssertEqual(vm.scrollTarget, 0, "视口要跟着回第 0 页,而不是停在上一本的 2")
+    }
 }

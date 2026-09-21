@@ -72,4 +72,70 @@ final class AppSkeletonTests: XCTestCase {
         XCTAssertGreaterThan(Budget.jumpPreviewLongEdge, Budget.gridThumbnailLongEdge)
         XCTAssertLessThan(Budget.jumpPreviewLongEdge, Budget.thumbnailLongEdge)
     }
+
+    /// 两份 `Localizable.strings` 的**键集合必须完全相等**(2026-09-21)。
+    ///
+    /// 这条以前是靠人手 `plutil` 比出来的(2026-09-20 那次记了「两份各 108 条、
+    /// 键一一对应」),而它恰好是一条**只加代码不会失败**的缺口:
+    /// 给菜单加一项、只往中文表补了译文,英文用户看到的就是菜单里那一行写着
+    /// `reader.layout.scroll` —— 一个键名。没有崩溃、没有日志、测试全绿。
+    ///
+    /// 读**源码文件**而不是构建产物:这样在编译之前就能拦下,
+    /// 而不是等有人切到英文再肉眼发现(顺带也免了「产物里是 UTF-16」那件事)
+    func testLocalizationTablesCarryTheSameKeys() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // UnrollTests
+            .deletingLastPathComponent()   // 仓库根
+            .appendingPathComponent("Unroll/Resources")
+        let tables = ["en", "zh-Hans"].map {
+            root.appendingPathComponent("\($0).lproj/Localizable.strings")
+        }
+        guard tables.allSatisfy({ FileManager.default.fileExists(atPath: $0.path) }) else {
+            throw XCTSkip("本地化源文件不可达(疑似测试宿主沙盒限制)")
+        }
+
+        func keys(_ url: URL) throws -> Set<String> {
+            let text = try String(contentsOf: url, encoding: .utf8)
+            var result: Set<String> = []
+            for line in text.split(separator: "\n") {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard trimmed.hasPrefix("\""),
+                      let closing = trimmed.dropFirst().firstIndex(of: "\"") else { continue }
+                result.insert(String(trimmed[trimmed.index(after: trimmed.startIndex)..<closing]))
+            }
+            return result
+        }
+
+        let en = try keys(tables[0])
+        let zh = try keys(tables[1])
+        XCTAssertFalse(en.isEmpty, "英文表一个键都没读到 —— 多半是解析或路径坏了")
+
+        // 两个方向分开报:只说"不相等"的话,拿到报错的人还得自己找出是哪几个
+        XCTAssertEqual(en.subtracting(zh), [], "中文表缺这些键(英文用户看得到、中文用户看到键名):")
+        XCTAssertEqual(zh.subtracting(en), [], "英文表缺这些键(反向的同一个问题):")
+    }
+
+    /// 连续滚动的**活跃窗口**必须留在全分辨率池的规模之内(2026-09-21)。
+    ///
+    /// 这是本项目第四次修同一个形状的问题,但这次的落点最隐蔽:
+    /// 前面三次(Trimmed 池、网格池、网格像素)都能在 `PageCache` 的账本里查到;
+    /// 而滚动模式下**行视图自己攥着 `CGImage`** —— 引用计数在视图手上,
+    /// `PageCache` 无论怎么淘汰都收不回来。也就是说:
+    /// 「LazyVStack 会回收看不见的行」这句话**不能当内存上限用**,
+    /// 真正能当上限的是这个窗口 + 行主动置空。
+    ///
+    /// 只锁不变量,不锁数字:窗口是手感参数(大小会调),但**它和页缓存的关系不该变**
+    func testScrollActiveWindowStaysWithinPageCacheBudget() {
+        typealias Budget = DesignSystem.PageBudget
+        // 窗口是「锚点两侧各 N 行」→ 同时驻留 2N+1 行(每行一页)
+        let residentPages = Budget.scrollActiveWindow * 2 + 1
+
+        // ① 驻留行数 ≤ 全分辨率池本来的页数上限 —— 滚动模式不许当那个
+        //    「偷偷把内存涨上去」的例外。调大到 4 就变成 9 行,当场被拦下
+        XCTAssertLessThanOrEqual(residentPages, Budget.maxCachedPages)
+
+        // ② 窗口至少要盖住一屏多一点:两侧各留一行,滚动时下面那张才不至于
+        //    刚进视野才开始解码(那样每次滚动都会先看到一次占位框)
+        XCTAssertGreaterThanOrEqual(Budget.scrollActiveWindow, 2)
+    }
 }

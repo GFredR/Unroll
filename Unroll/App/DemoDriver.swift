@@ -10,6 +10,7 @@
 //   demo-enabled  → 翻页演示(录 GIF 用,时间轴与 2026-09 完全一致)
 //   demo-grid     → 缩略图网格面板(⇧⌘G)取证
 //   demo-jump     → 页码跳转面板 + 侧边预览(⌥⌘G)取证
+//   demo-scroll   → 连续滚动(⌘0)取证(下行 + 回程,见 runScroll 的判据说明)
 //
 // 为什么用标记文件而不是 argv:`open --args` 在 macOS 15 上实测**传不进 App**
 // (LaunchServices 会过滤未知 argv;2026-09-20 用探针 App 复核 —— 经 `open`
@@ -17,7 +18,7 @@
 // 环境变量 UNROLL_DEMO_SCRIPT 仍作兜底(值 grid/jump 选场景,其它非空值 = 翻页)。
 //
 // 录制脚本见 Scripts/record-demo.sh;
-// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump)。
+// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll)。
 // 不需要演示时:直接删掉本文件 + UnrollApp.swift 里那一处 #if DEBUG 调用即可。
 //
 // 调试:每个节点写一行到容器 tmp/demo-driver.log
@@ -45,6 +46,8 @@ enum DemoDriver {
         case grid = "demo-grid"
         /// 页码跳转面板 + 侧边预览(⌥⌘G)
         case jump = "demo-jump"
+        /// 连续滚动(⌘0)。**必须真的是「滚」**:见 `runScroll` 的判据说明
+        case scroll = "demo-scroll"
 
         /// 认全名(`demo-grid`)与简写(`grid`)。**认不出返回 nil**,由调用方决定
         /// 兜底 —— 环境变量那条路的旧语义是「随便给个非空值就翻页」,
@@ -53,6 +56,7 @@ enum DemoDriver {
             switch token {
             case Scene.grid.rawValue, "grid": return .grid
             case Scene.jump.rawValue, "jump": return .jump
+            case Scene.scroll.rawValue, "scroll": return .scroll
             default: return nil
             }
         }
@@ -75,7 +79,7 @@ enum DemoDriver {
         // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
         guard !UnrollRuntime.isTesting else { return nil }
 
-        for scene in [Scene.grid, .jump, .paging]
+        for scene in [Scene.grid, .jump, .scroll, .paging]
         where FileManager.default.fileExists(atPath: flagURL(for: scene).path) {
             return scene
         }
@@ -141,6 +145,8 @@ enum DemoDriver {
         case .jump:
             await prepareForProbe(on: vm)
             await runJump(on: vm)
+        case .scroll:
+            await runScroll(on: vm)
         }
     }
 
@@ -284,6 +290,49 @@ enum DemoDriver {
             + "previewPage=\(vm.jumpPreviewPage.map(String.init) ?? "nil") "
             + "hasPreview=\(hasPreview) failure=\(hasFailure) loading=\(loading) "
             + "waited=\(ticks * 100)ms")
+    }
+
+    /// 场景:连续滚动(⌘0)。
+    ///
+    /// **判据怎么分**(这条场景比前两条更需要说清):
+    ///   · `first` / `mid` / `back` 三个锚点值证明的是**锚点漏斗接通了**
+    ///     —— 写 `scrollTarget` 之后 `pageIndex` 跟着走、且来回都对得上。
+    ///     它**不是**「视口真的滚了」的证据:程序化设值会在同一次设值里同步回填,
+    ///     所以哪怕滚动视图根本没动,这三个数也会是对的。
+    ///   · 「视口真的动了」只能靠 **`rowLoads` 的增量**:那个计数**只由行视图**
+    ///     累加(VM 自己读图与预读都不计入)。视口不动 → 新行不会 materialize
+    ///     → 计数不涨。这是本场景里唯一的机器硬证据。
+    ///   · 观感(一列铺开、图与图之间的间距、滚动条)仍然由截图负责。
+    ///
+    /// 只验"能滚"是不够的,所以刻意排了**下行 + 回程**两段:回程覆盖的是
+    /// 「向上滚动」那条路 —— solid 7z 上后向访问会让顺序扫描器重开(O(已读页数)),
+    /// 一趟回程就能把「有没有退化到卡死」直接暴露出来
+    private static func runScroll(on vm: ReaderViewModel) async {
+        vm.layout = .scroll
+        try? await Task.sleep(for: .milliseconds(900))
+
+        // 起点:第 2 页(封面当锚点太容易被误读成"只有一页")
+        vm.goTo(min(1, max(vm.pageCount - 1, 0)))
+        try? await Task.sleep(for: .seconds(1.4))
+        let first = vm.pageIndex
+        let loadsBefore = vm.scrollRowLoads
+
+        // 下行:跳到最后几页之前(留几行在后面,让视口下方仍有内容)
+        let expectedMid = max(vm.pageCount - 3, 0)
+        vm.scrollTarget = expectedMid
+        try? await Task.sleep(for: .seconds(2.0))
+        let mid = vm.pageIndex
+        let loadsAfter = vm.scrollRowLoads
+
+        // 回程:回到起点
+        vm.scrollTarget = first
+        try? await Task.sleep(for: .seconds(2.0))
+        let back = vm.pageIndex
+
+        log("scene=scroll layout=\(vm.layout.rawValue) pages=\(vm.pageCount) "
+            + "first=\(first) mid=\(mid) expectedMid=\(expectedMid) back=\(back) "
+            + "loadsBefore=\(loadsBefore) loadsAfter=\(loadsAfter) rowLoads=\(vm.scrollRowLoads) "
+            + "aspect=\(String(format: "%.3f", vm.lastKnownAspect))")
     }
 }
 #endif

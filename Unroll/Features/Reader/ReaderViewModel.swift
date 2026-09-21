@@ -61,10 +61,26 @@ final class ReaderViewModel: ObservableObject {
 
     // MARK: - 阅读模式(M3)
 
-    /// 单页 / 双页(§0 决策 3:双页可关)
+    /// 单页 / 双页 / 连续滚动(v2 候选池「连续滚动」落地,2026-09-21)。
+    ///
+    /// **为什么做成三选一而不是「布局 × 浏览方式」两个正交轴**:
+    /// 连续滚动的本质是**一行一页的纵向流** —— 跨页内容在滚动下本来就断开,
+    /// 「双页」在这里没有意义。做成第三个 case 的额外好处是**零语义漂移**:
+    /// `SpreadPaging` 的调用点全都写着 `dual: layout.isSpread`,滚动模式下
+    /// 它们自动退化成正确的单页行为,不需要在十几处补判断(补漏一处就是
+    /// 「滚动时冒出半个摊」这种肉眼可见的内容错乱)。
+    ///
+    /// **与双页互斥,但不丢配置**:`coverAlone` 在滚动模式下不参与配对,
+    /// 切回双页时原值照旧生效(菜单项在该模式下灰掉,见 `UnrollApp`)。
     enum PageLayout: String {
         case single
         case dual
+        /// 连续滚动(竖向);见 `PageScrollView`。行的单位是**页**,不是摊
+        case scroll
+
+        /// 是否按「摊」组织内容(决定 `SpreadPaging` 的 dual 参数)。
+        /// **只有这里能回答这个问题** —— 别在各处重新写 `layout == .dual`
+        var isSpread: Bool { self == .dual }
     }
 
     /// 阅读方向:左开 / 日漫右开(右→左)
@@ -142,7 +158,7 @@ final class ReaderViewModel: ObservableObject {
     /// 配对口径全在 `SpreadPaging`(纯函数,独立单测)—— 本处只做转发
     var secondaryIndex: Int? {
         SpreadPaging.secondaryIndex(for: pageIndex, pageCount: pageCount,
-                                   dual: layout == .dual, coverAlone: coverAlone)
+                                   dual: layout.isSpread, coverAlone: coverAlone)
     }
 
     // MARK: - 私有
@@ -530,6 +546,11 @@ final class ReaderViewModel: ObservableObject {
 
         pageCount = 0
         pageIndex = 0
+        // 滚动视角也是「上一本书的状态」:不清掉,换书后第一帧会先滚到旧书的页码
+        // 再弹回来(新书往往页数更少,那一滚还可能被夹到末页)
+        scrollTarget = nil
+        scrollRowLoads = 0
+        lastKnownAspect = 2.0 / 3.0
         encryptedPageCount = 0
         documentKey = nil          // 旧文档的进度键立即失效,换书后不得误写
         bookmarkedPages = []
@@ -606,13 +627,18 @@ final class ReaderViewModel: ObservableObject {
                 isRestoringProgress = false
                 // 归一:存的是「当时在上屏的那一页」,双页下要落回所属摊的首面,
                 // 否则会恢复出「主图是摊第二面」的错位摊(配对口径变过时尤其明显)
-                startPage = layout == .dual
+                startPage = layout.isSpread
                     ? SpreadPaging.spreadStart(for: saved.page, coverAlone: coverAlone)
                     : saved.page
                 pageIndex = startPage    // 状态机页码同步(翻页语义全走 goTo,这里是对齐)
                 Breadcrumbs.shared.record(.progressRestored(page: startPage))
             }
 
+            // 滚动模式下还要把**视口**对齐到开篇页 —— 且必须在分支**外面**:
+            // 无续读记录时 startPage = 0,视口同样需要一个显式的「回顶部」请求。
+            // 否则就只剩「scrollTarget 为 nil 时系统会停在顶部」这种隐式约定,
+            // 而它成立与否取决于 SwiftUI 换书时是否重建滚动容器(不该赌这个)
+            requestScroll(to: startPage)
             await loadPage(startPage)
             await store.anchorDidChange(to: startPage)
         } catch is CancellationError {
@@ -799,9 +825,18 @@ final class ReaderViewModel: ObservableObject {
     func goTo(_ index: Int) {
         guard phase == .reading, store != nil, pageCount > 0 else { return }
         let clamped = min(max(index, 0), pageCount - 1)
-        let target = layout == .dual
+        let target = layout.isSpread
             ? SpreadPaging.spreadStart(for: clamped, coverAlone: coverAlone)
             : clamped
+
+        // 滚动模式:页码由**视口**说了算(见 `scrollAnchorChanged`),这里只把
+        // 视口挪过去。**不能顺手写 pageIndex** —— 那样在视口跟上之前的这一帧里,
+        // HUD 会显示一个屏幕上根本没在看的页号
+        if layout == .scroll {
+            requestScroll(to: target)
+            return
+        }
+
         guard target != pageIndex || presentation.failure != nil else { return }
 
         pageIndex = target
@@ -814,20 +849,112 @@ final class ReaderViewModel: ObservableObject {
 
     func nextPage() {
         goTo(SpreadPaging.next(from: pageIndex, pageCount: pageCount,
-                               dual: layout == .dual, coverAlone: coverAlone))
+                               dual: layout.isSpread, coverAlone: coverAlone))
     }
 
     func previousPage() {
         goTo(SpreadPaging.previous(from: pageIndex, pageCount: pageCount,
-                                   dual: layout == .dual, coverAlone: coverAlone))
+                                   dual: layout.isSpread, coverAlone: coverAlone))
+    }
+
+    // MARK: - 连续滚动(v2 候选池最后一项,2026-09-21)
+
+    /// 视口顶部那一页 —— 驱动 `PageScrollView` 的 `scrollPosition(id:)`。
+    /// **双向**:用户滚动时 SwiftUI 往里写;`goTo` / 换布局时我们也往里写。
+    /// 分页模式下它是个惰性值(没人读也没人写),不参与渲染
+    @Published var scrollTarget: Int? {
+        didSet {
+            guard let index = scrollTarget else { return }
+            scrollAnchorChanged(to: index)
+        }
+    }
+
+    /// 视口锚点变化 —— **滚动模式下页码的唯一来源**。
+    ///
+    /// 与分页模式的 `goTo` 是两条路:那边是「按下翻页 → 页码变 → 加载」,
+    /// 这边是「视口滚到哪 → 页码跟着变」。把 `pageIndex` 的写权收在这一处,
+    /// 才不会出现「页码和屏幕上那一页各说各话」——
+    /// 而 HUD、书签、续读、窗口标题全都读 `pageIndex`。
+    ///
+    /// 预读不在这里另开一份:`loadPage` 末尾本来就会 `anchorDidChange`,
+    /// 于是顺序扫描器的预读窗口天然跟着视口走(这正是滚动模式最需要的)——
+    /// 少了它,solid 7z 上「滚下去」会退化成每页一次随机访问
+    private func scrollAnchorChanged(to index: Int) {
+        guard layout == .scroll, phase == .reading, pageCount > 0 else { return }
+        let clamped = min(max(index, 0), pageCount - 1)
+        guard clamped != pageIndex else { return }
+        pageIndex = clamped
+        saveProgressNow()
+        // 顺带把锚点页灌进 `presentation`(缓存在 `PageStore` 里,行视图多半
+        // 已经解过,这里几乎不额外花钱)。用途两个:另存当前页(⌘S)在滚动模式下
+        // 照常可用,以及切回分页模式时第一帧就是对的页
+        Task { await loadPage(clamped) }
+    }
+
+    /// 滚动模式:请求把视口挪到某一页。**只请求,不写页码** ——
+    /// 页码由 `scrollAnchorChanged` 回填,保证「页码 == 屏幕上那一页」恒成立
+    private func requestScroll(to index: Int) {
+        guard layout == .scroll, pageCount > 0 else { return }
+        scrollTarget = min(max(index, 0), pageCount - 1)
+    }
+
+    /// 滚动模式:**行视图**取图的累计次数(诊断/取证用)。
+    ///
+    /// 为什么需要它:VM 自己也会读图(锚点页 + 预读),所以「缓存里有图」这件事
+    /// **证明不了「行真的渲染了」** —— 而这两种失败长得完全不一样:
+    /// 前者对后者错,屏幕上就是一片占位框。这个计数是「行在干活」的最小可核对证据,
+    /// 也是唯一能证明**视口真的移动过**的机器信号(视口不动 → 新行不会 materialize
+    /// → 计数不动)
+    private(set) var scrollRowLoads = 0
+
+    /// 滚动模式单行的加载结果。**带失败详情而不是只给 nil** ——
+    /// 分页模式的失败卡片里有「此页已加密 → 去输密码」与「其余 %d 页可读」,
+    /// 滚动模式的行同样需要它们(把错误吞成一个 nil 就等于把这些出路一起吞了)
+    enum ScrollPageLoad {
+        case image(CGImage)
+        case failure(Failure)
+    }
+
+    /// 滚动模式:某一页的图(行视图按需调用)。缓存 / 去重 / 解码全在 `PageStore`,
+    /// 这里只是转发(顺带计一次 `scrollRowLoads`)。
+    ///
+    /// **刻意不写「解码成功」面包屑**:一屏可能同时铺开好几行,每行都记会把诊断
+    /// 文件淹成一片成功记录;真正有价值的信号是**锚点跨页**,那条已由
+    /// `scrollAnchorChanged` → `loadPage` 记下。失败则相反 —— 一定要记
+    func loadScrollPage(at index: Int) async -> ScrollPageLoad? {
+        guard let store, phase == .reading else { return nil }
+        do {
+            let image = try await store.image(at: index)
+            scrollRowLoads += 1
+            return .image(image)
+        } catch let error as ArchiveError {
+            Breadcrumbs.shared.record(.pageFailed(index: index))
+            return .failure(pageFailure(for: error))
+        } catch {
+            Breadcrumbs.shared.record(.pageFailed(index: index))
+            return .failure(pageFailure(for: .corrupted))
+        }
+    }
+
+    /// 滚动模式的行高估算基准:最近一次成功解码页的长宽比(宽 / 高)。
+    ///
+    /// **为什么必须有它**:行高若等图片到达才定,`LazyVStack` 里「上面那行一变高
+    /// 就把下面全推走」会一路抖。同一本单行本的页尺寸几乎恒定,拿上一页的比例
+    /// 当初值基本必然命中;混排的包也只是一次微调,而不是从零开始跳
+    @Published private(set) var lastKnownAspect: CGFloat = 2.0 / 3.0
+
+    func notePageAspect(_ aspect: CGFloat) {
+        guard aspect > 0.01, abs(aspect - lastKnownAspect) > 0.001 else { return }
+        lastKnownAspect = aspect
     }
 
     /// 配对口径变化(布局 / 封面单独)后,把当前页归一到所属摊并刷新两面。
     /// 不是摊首面时主图本身要换(否则会出现「主图是摊的第二面」的错位),
-    /// 是摊首面时只补次页(主图不动、无闪烁)
+    /// 是摊首面时只补次页(主图不动、无闪烁)。
+    /// **切换布局的唯一收口** —— 也是「进滚动模式时把视口对齐到当前页」的落点
     private func realignSpread() {
         guard phase == .reading, pageCount > 0 else { return }
-        let target = layout == .dual
+        let target = layout.isSpread
             ? SpreadPaging.spreadStart(for: pageIndex, coverAlone: coverAlone)
             : pageIndex
         if target != pageIndex {
@@ -839,6 +966,7 @@ final class ReaderViewModel: ObservableObject {
         } else {
             refreshSecondary()
         }
+        requestScroll(to: pageIndex)
         saveProgressNow()
     }
 
@@ -991,7 +1119,7 @@ final class ReaderViewModel: ObservableObject {
     func exportImage() -> CGImage? {
         guard phase == .reading, let primary = presentation.image else { return nil }
         return PageExport.compose(primary: primary,
-                                  secondary: layout == .dual ? secondary : nil,
+                                  secondary: layout.isSpread ? secondary : nil,
                                   rightToLeft: direction == .rightToLeft)
     }
 

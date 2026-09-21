@@ -79,6 +79,8 @@
 "app.menu.view" = "View";
 "reader.layout.single" = "Single Page";
 "reader.layout.dual" = "Two Pages";
+/* Continuous vertical scroll; rows are single pages, so it replaces Two Pages rather than combining with it */
+"reader.layout.scroll" = "Continuous Scroll";
 "app.menu.coverAlone" = "Cover on Its Own Page";
 "reader.direction.ltr" = "Left to Right";
 "reader.direction.rtl" = "Right to Left (Manga)";

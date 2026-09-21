@@ -44,8 +44,8 @@ if [ "$#" -gt 0 ]; then
     echo "✗ 不接受位置参数:$*" >&2
     echo "  这几个是环境变量,要写在命令**前面**:" >&2
     echo "    ONLY=<段名> APP=<.app> OUT_DIR=<目录> $0" >&2
-    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump" >&2
-    echo "  (grid / jump 需要可驱动的 Debug 版,见文末说明)" >&2
+    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll" >&2
+    echo "  (grid / jump / scroll 需要可驱动的 Debug 版,见文末说明)" >&2
     exit 2
 fi
 
@@ -403,10 +403,16 @@ fi
 #     守卫有洞,顺着走就会去拆掉守卫本身。)
 #
 # 判据分两层,缺一不可:
-#   · 驱动状态行 → 证明**数据对**(生成了几张 / 预览的是哪一页)
+#   · 驱动状态行 → 证明**数据对**(生成了几张 / 预览的是哪一页 / 视口动没动)
 #   · 截图       → 证明**长得对**,这层只能人看
 # 只看截图会漏掉「铺出来了但少几页」;只看状态行会漏掉「数据对但版式塌了」。
-if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
+#
+# ONLY=scroll(连续滚动 ⌘0,2026-09-21)走同一套机制,但**样本换成宽幅**:
+# 高窄页按宽度适配后单页高约 2.2 屏,一帧里只看得见一页的一部分 ——
+# 「一列铺开」这个版式特征在截图里根本显现不出来(那不是拍得不好,是几何)。
+# 换成 1600x600 的宽幅页,行高约 0.66 屏,一帧能看到一行半,间距与连续关系都可见。
+# 这是**选样本**让性质可观测,不是给性质加修饰。
+if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ]; then
     head2 "缩略图网格 / 跳转预览取证(ONLY=$ONLY)"
 
     PROBE_TMP="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
@@ -417,8 +423,15 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
     # 复用 plain.cbz 是不行的:它只有 3 页,一格一页地铺根本看不出「一屏多张」——
     # 而那正是这两个面板存在的理由。样本落在**仓库之外**(与 Unroll-dist 同规)。
     PROBE_DIR="${PROBE_DIR:-${ROOT_DIR}-manual-fixtures}"
-    PROBE_SAMPLE="${PROBE_SAMPLE:-$PROBE_DIR/probe-grid-sample.cbz}"
     PROBE_PAGES="${PROBE_PAGES:-30}"
+    if [ "$ONLY" = "scroll" ]; then
+        # 宽幅样本,理由见上面那段注释(高窄页看不出「一列」)
+        PROBE_SAMPLE="${PROBE_SAMPLE:-$PROBE_DIR/probe-scroll-sample.cbz}"
+        GEN_W=1600; GEN_H=600
+    else
+        PROBE_SAMPLE="${PROBE_SAMPLE:-$PROBE_DIR/probe-grid-sample.cbz}"
+        GEN_W=600; GEN_H=850
+    fi
     if [ ! -s "$PROBE_SAMPLE" ]; then
         mkdir -p "$PROBE_DIR"
         GEN="$PROBE_DIR/gen_big_sample"
@@ -427,8 +440,8 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
             xcrun --sdk macosx swiftc -O -o "$GEN" Scripts/gen_big_sample.swift >/dev/null 2>&1 \
                 || { bad "gen_big_sample 编译失败"; exit 2; }
         fi
-        info "造 $PROBE_PAGES 页取证样本(仓库外,约 1s)…"
-        "$GEN" --pages "$PROBE_PAGES" --width 600 --height 850 --quality 0.5 \
+        info "造 $PROBE_PAGES 页取证样本($GEN_W x $GEN_H,仓库外,约 1s)…"
+        "$GEN" --pages "$PROBE_PAGES" --width "$GEN_W" --height "$GEN_H" --quality 0.5 \
                --out "$PROBE_SAMPLE" >/dev/null 2>&1 \
             || { bad "样本生成失败"; exit 2; }
     fi
@@ -436,11 +449,11 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
     ok "取证样本:$(basename "$PROBE_SAMPLE")(${PROBE_PAGES_ON_DISK} 页)"
 
     # ---- 场景 ----
-    if [ "$ONLY" = "grid" ]; then
-        SCENE="grid"; SHOT="shot-grid-panel.png"; WAIT_PAT="scene=grid pages="
-    else
-        SCENE="jump"; SHOT="shot-jump-preview.png"; WAIT_PAT="scene=jump current="
-    fi
+    case "$ONLY" in
+    grid)   SCENE="grid";   SHOT="shot-grid-panel.png";     WAIT_PAT="scene=grid pages=" ;;
+    jump)   SCENE="jump";   SHOT="shot-jump-preview.png";   WAIT_PAT="scene=jump current=" ;;
+    scroll) SCENE="scroll"; SHOT="shot-continuous-scroll.png"; WAIT_PAT="scene=scroll layout=" ;;
+    esac
 
     quit_app
     reset_session
@@ -473,7 +486,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
         info "当前 APP=$APP"
         info "构建:xcodebuild build -project Unroll.xcodeproj -scheme Unroll \\"
         info "        -configuration Debug -destination 'platform=macOS' -derivedDataPath <目录>"
-        info "说明:⇧⌘G / ⌥⌘G 无法从外部注入(TCC 拒绝发送按键),只能由 App 自己驱动"
+        info "说明:⇧⌘G / ⌥⌘G / ⌘0 都无法从外部注入(TCC 拒绝发送按键),只能由 App 自己驱动"
         exit 2
     fi
     ok "驱动已启动"
@@ -514,7 +527,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
         [ "${G_FAIL:-1}" = "0" ] && [ "${G_SKIP:-1}" = "0" ] \
             && ok "样本无坏页无加密页(failed=0 skipped=0)" \
             || bad "不该有失败/跳过:failed=$G_FAIL skipped=$G_SKIP"
-    else
+    elif [ "$ONLY" = "jump" ]; then
         J_CUR="$(field current)"; J_PREV="$(field previewPage)"
         J_HAS="$(field hasPreview)"; J_FAIL="$(field failure)"; J_LOAD="$(field loading)"
         [ "${J_HAS:-0}" = "1" ] && ok "预览已取到图(previewPage=$J_PREV)" \
@@ -526,20 +539,49 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
         [ "${J_FAIL:-1}" = "0" ] && [ "${J_LOAD:-1}" = "0" ] \
             && ok "预览不是失败态也不是转圈态" \
             || bad "预览停在异常态:failure=$J_FAIL loading=$J_LOAD"
+    else
+        S_LAYOUT="$(field layout)"; S_FIRST="$(field first)"; S_MID="$(field mid)"
+        S_EXPECT="$(field expectedMid)"; S_BACK="$(field back)"
+        S_BEFORE="$(field loadsBefore)"; S_AFTER="$(field loadsAfter)"
+
+        [ "${S_LAYOUT:-x}" = "scroll" ] && ok "已切到滚动模式" \
+            || bad "模式没切过去:layout=${S_LAYOUT:-nil}"
+
+        # 下行与回程的锚点。**注意这两条证明的是「锚点漏斗接通了」**,
+        # 不是「视口真的滚了」—— 程序化设值会在同一次设值里同步回填 pageIndex,
+        # 所以哪怕滚动视图根本没动,这两个数也会是对的。别把它们讲过头
+        [ "${S_MID:-x}" = "${S_EXPECT:-y}" ] && ok "下行锚点到位:$S_MID" \
+            || bad "下行锚点不对:mid=${S_MID:-nil} expected=$S_EXPECT"
+        [ "${S_BACK:-x}" = "${S_FIRST:-y}" ] && ok "回程锚点回到起点:$S_BACK" \
+            || bad "回程锚点不对:back=${S_BACK:-nil} first=$S_FIRST"
+
+        # 「视口真的移动过」的**唯一**机器判据:rowLoads 只由行视图累加
+        # (VM 自己的锚点页读取与预读都不计入)。视口不动 → 新行不会 materialize
+        # → 计数不涨。少了这一条,上面那两条可以全绿而屏幕上是一片占位框
+        if [ "${S_AFTER:-0}" -gt "${S_BEFORE:-0}" ] 2>/dev/null; then
+            ok "视口确实移动过并渲染了新行(rowLoads $S_BEFORE → $S_AFTER)"
+        else
+            bad "行视图没有为新位置取图:$S_BEFORE → ${S_AFTER:-nil}(视口可能没动)"
+        fi
     fi
 
     # ---- 截图 ----
     # sheet 是独立窗口,且**没有标题** —— 主窗口的标题是「文件名 · P.n/m」。
     # 这两点合起来是「哪个窗口是面板」的可靠判据(比按尺寸挑稳:主窗口
-    # 900x508、网格面板 720x520,高度几乎一样,按尺寸会选错)
+    # 900x508、网格面板 720x520,高度几乎一样,按尺寸会选错)。
+    # 滚动模式没有面板,拍的就是**主窗口** —— 正是上面那条判据的反面
     ID=""
     for i in $(seq 1 20); do
-        ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3=="" {print $1; exit}')"
+        if [ "$ONLY" = "scroll" ]; then
+            ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3!="" {print $1; exit}')"
+        else
+            ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3=="" {print $1; exit}')"
+        fi
         [ -n "$ID" ] && break
         sleep 0.5
     done
     if [ -z "$ID" ]; then
-        bad "没找到面板窗口(sheet 应为独立无标题窗口)"
+        bad "没找到要拍的窗口(面板 = 无标题 sheet;滚动模式 = 有标题的主窗口)"
     else
         rm -f "$OUT_DIR/$SHOT"
         screencapture -l"$ID" -x -o "$OUT_DIR/$SHOT" 2>/dev/null
@@ -547,6 +589,57 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ]; then
             ok "$SHOT"
         else
             bad "$SHOT 截图失败"
+        fi
+    fi
+
+    # ---- 版式测量:页面有没有被横向裁掉(ONLY=scroll,2026-09-21)----
+    #
+    # 这一条是上面那堆状态行断言**测不到**的:状态行只能证「数据对」,页面被裁掉
+    # 15pt(两边各 7.5pt)时状态行全绿,截图上看着也还是「铺满」—— 肉眼分不出。
+    #
+    # 所以拿样本页**自带的**内容当尺子:生成器给每页画了页脚进度条(黑底 + 白色
+    # 「已完成」段),白段宽 = 页宽 × n/总页数。按**滚动视图内容区实宽**算出的期望
+    # 值,与被裁时的实测值差 ~13 设备px —— 足以把「铺满」和「被裁」分开。
+    # 期望值从状态行的 first/pages 推,不写死页码;样本宽高从 GEN_W/GEN_H 取。
+    if [ "$ONLY" = "scroll" ] && [ -s "$OUT_DIR/$SHOT" ]; then
+        METRICS=/tmp/verify-ui-pagemetrics
+        if [ ! -x "$METRICS" ]; then
+            swiftc -O -o "$METRICS" Scripts/page_metrics.swift >/dev/null 2>&1 \
+                || bad "page_metrics.swift 编译失败"
+        fi
+        if [ -x "$METRICS" ]; then
+            M="$("$METRICS" "$OUT_DIR/$SHOT" 2>/dev/null || true)"
+            mfield() { printf '%s\n' "$M" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
+            M_COL="$(mfield colRight)"; M_BAR="$(mfield barWhiteRight)"
+            M_H="$(mfield blockHeight)"; M_STRIP="$(mfield scrollerStrip)"
+            info "版式: 内容区右缘=${M_COL:-nil} 页高=${M_H:-nil} 页脚白段右缘=${M_BAR:-nil} 滚动条占位=${M_STRIP:-nil}"
+
+            S_PAGES="$(field pages)"
+            if [ -n "$M_COL" ] && [ -n "$M_BAR" ] && [ -n "${S_FIRST:-}" ] && [ -n "${S_PAGES:-}" ]; then
+                # 页面按内容区实宽铺满 → 页脚白段右缘 = 实宽 × (index+1)/总页数
+                WANT=$(( M_COL * (S_FIRST + 1) / S_PAGES ))
+                D=$(( M_BAR - WANT )); [ "$D" -lt 0 ] && D=$(( -D ))
+                if [ "$D" -le 5 ]; then
+                    ok "页面铺满内容区实宽(页脚白段 ${M_BAR} ≈ ${WANT} 设备px)"
+                else
+                    bad "页面被横向裁了:页脚白段 ${M_BAR},按内容区实宽应为 ${WANT}(差 ${D} 设备px)"
+                fi
+            else
+                bad "量不出页面版式:colRight=${M_COL:-nil} bar=${M_BAR:-nil}"
+            fi
+
+            # 第二条独立判据:页高必须等于「按内容区实宽等比」的高度。
+            # 被裁时页面按 900pt 排(高 675),实宽等比只要 664 —— 差 11。这条
+            # 不依赖页脚进度条,所以它和上面那条不会「同时瞎」
+            if [ -n "$M_H" ] && [ -n "$M_COL" ]; then
+                WANTH=$(( M_COL * GEN_H / GEN_W ))
+                DH=$(( M_H - WANTH )); [ "$DH" -lt 0 ] && DH=$(( -DH ))
+                if [ "$DH" -le 8 ]; then
+                    ok "页面按实宽等比:页高 ${M_H} ≈ ${WANTH}"
+                else
+                    bad "页面比例不对:页高 ${M_H},按内容区实宽等比应为 ${WANTH}(差 ${DH})"
+                fi
+            fi
         fi
     fi
 
@@ -573,5 +666,6 @@ echo "    · 崩溃询问的文案读起来会不会太硬"
 echo "    · 空态的三个元素(AppIcon / 说明 / 打开按钮)是否协调"
 echo "    · dmg 里两个图标的位置关系是否符合直觉(左 App 右 Applications)"
 echo "    · HUD 的进度条拖起来跟不跟手(拖动中页码跟着变,松手才跳页)"
+echo "    · 连续滚动连滑的跟手程度与掉帧(版式与「有没有被裁」已由上面的版式测量量过)"
 echo "    · 「文件 → 另存当前页…」存出来的图与屏幕上看到的一致(双页应是一整摊)"
 echo "    · 静止 2.5s 后光标是否一起隐藏、动一下就回来"

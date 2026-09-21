@@ -234,18 +234,30 @@ private struct ReaderCanvas: View {
     @State private var hudVisible = false
     @State private var hudHideTask: Task<Void, Never>?
 
+    /// 连续滚动模式(2026-09-21)。画布在这一模式下整体换渲染路径,
+    /// 并把缩放 / 平移 / 半屏点击那一整套手势让出去
+    private var scrollMode: Bool { viewModel.layout == .scroll }
+
+    /// 手势掩码:滚动模式下一律 `.none`(理由见 `body` 里那段注释)
+    private var gestureMask: GestureMask { scrollMode ? .none : .all }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
                 DesignSystem.Palette.canvas.ignoresSafeArea()
 
-                if let failure = viewModel.presentation.failure {
+                if scrollMode {
+                    // 连续滚动:一条独立的渲染路径(理由见 PageScrollView 文件头)
+                    PageScrollView(viewModel: viewModel, onActivity: pokeHUD)
+                } else if let failure = viewModel.presentation.failure {
                     pageFailureCard(failure)
                 } else {
                     spread(in: proxy.size)
                 }
 
-                if viewModel.presentation.isLoading {
+                // 居中的加载指示**只属于分页模式**:滚动模式下每一行自己渲染,
+                // 一个转圈图标会盖在正在读的那一页上
+                if viewModel.presentation.isLoading, !scrollMode {
                     ProgressView()
                         .controlSize(.large)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -256,12 +268,17 @@ private struct ReaderCanvas: View {
             .contentShape(Rectangle())   // 点击区覆盖整个画布(含黑边)
             // 鼠标/触控板移动 → HUD 立现(onContinuousHover 只在移动时触发)
             .onContinuousHover { _ in pokeHUD() }
-            // 单击翻页(半屏分区);双击缩放的判定优先于单击
-            .gesture(spatialTap(in: proxy))
-            .gesture(TapGesture(count: 2).onEnded(toggleZoom))
-            .gesture(magnify)
+            // 单击翻页(半屏分区);双击缩放的判定优先于单击。
+            // 下面四条都带 `gestureMask`:**滚动模式下整体让位** ——
+            // 平移手势与纵向滚动方向完全重叠,留着会把滚动视图的滚动整个吃掉。
+            // 用 GestureMask.none 而不是条件构造手势:后者会改变视图树结构,
+            // 切模式时整棵子树重建,滚动位置也就跟着丢了
+            .gesture(spatialTap(in: proxy), including: gestureMask)
+            .gesture(TapGesture(count: 2).onEnded(toggleZoom), including: gestureMask)
+            .gesture(magnify, including: gestureMask)
             // 平移:放大后;或档位本身可能溢出窗口(适应宽/适应高/1:1)时也放行
-            .gesture(zoom > 1 || viewModel.fitMode != .fitWindow ? drag : nil)
+            .gesture(zoom > 1 || viewModel.fitMode != .fitWindow ? drag : nil,
+                     including: gestureMask)
         }
         .onChange(of: viewModel.pageIndex) { _, _ in
             // 翻页即回到适配视图:缩放状态不属于「这一页」,属于「这次阅读会话」
@@ -346,30 +363,10 @@ private struct ReaderCanvas: View {
         }
     }
 
-    /// 单页失败卡片(图 6 Failed 态;归档仍打开,可继续翻其他页)
+    /// 单页失败卡片(图 6 Failed 态;归档仍打开,可继续翻其他页)。
+    /// 实体已抽到 `PageFailureCard`(2026-09-21):滚动模式的行要用同一张
     private func pageFailureCard(_ failure: ReaderViewModel.Failure) -> some View {
-        VStack(spacing: DesignSystem.Spacing.sm) {
-            Image(systemName: "photo.badge.exclamationmark")
-                .font(.system(size: 40))
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-            Text(L10n.tr(failure.titleKey))
-                .font(.system(size: DesignSystem.Typography.body, weight: .medium))
-            if let bodyKey = failure.bodyKey {
-                Text(failure.bodyArg.map { L10n.tr(bodyKey, $0) } ?? L10n.tr(bodyKey))
-                    .font(.system(size: DesignSystem.Typography.footnote))
-                    .foregroundStyle(.secondary)
-            }
-            // 加密页顺手给一条出路:否则用户看到「此页已加密」也不知道去哪输密码
-            // (菜单里那一项不够显眼)。只在真有未解锁页时出现
-            if viewModel.hasLockedPages {
-                Button(L10n.tr("app.menu.unlock")) { viewModel.beginUnlock() }
-                    .buttonStyle(.borderless)
-                    .padding(.top, DesignSystem.Spacing.xs)
-            }
-        }
-        .padding(DesignSystem.Spacing.lg)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: DesignSystem.Radius.card))
+        PageFailureCard(failure: failure, viewModel: viewModel)
     }
 
     /// 页码指示已由 HUDView 替代(M3);保留此注释占位历史
@@ -504,6 +501,10 @@ private struct ReaderCanvas: View {
             // 网格是靠滚轮浏览的,不拦截的话滚一下既滚了网格又翻了底下的页
             guard !viewModel.isJumpSheetPresented,
                   !viewModel.isGridSheetPresented else { return event }
+            // **滚动模式必须整个让位**(2026-09-21)。不拦的话滚一下会同时
+            // 「滚了列表」和「翻了一页」—— 这是"模式切了但滚轮还留在旧逻辑"
+            // 最直观的坏法,而且看起来像滚动本身卡了
+            guard !scrollMode else { return event }
             guard zoom * pinchScale <= 1 else { return event }
             let now = Date()
             guard now.timeIntervalSince(lastWheelPageAt) > 0.3 else { return event }

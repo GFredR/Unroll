@@ -105,6 +105,18 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
     }
 
+    /// 连续滚动(⌘0,v2 候选池最后一项 2026-09-21)。取 ⌘0 而不是 ⌘7:
+    /// 数字键 3–6 已被缩放档位占满,而 0 与「单页 ⌘1 / 双页 ⌘2」**物理相邻**,
+    /// 菜单里同属「怎么排」那一组(分隔线与「怎么缩放」那组隔开)。
+    /// 放在 7 会让它看起来属于缩放那一组 —— 而它在滚动模式下恰好是灰的
+    func testViewMenuCarriesContinuousScrollWithCommand0() throws {
+        _ = try requireMenu()
+        let title = L10n.tr("reader.layout.scroll")
+        let item = try XCTUnwrap(menuItem(titled: title), "菜单里找不到「\(title)」")
+        XCTAssertEqual(item.keyEquivalent, "0")
+        XCTAssertEqual(item.keyEquivalentModifierMask, .command)
+    }
+
     // MARK: - 既有命令不许在重构里掉队
 
     /// M3 验收标准「纯键盘可完成全部操作」的可执行版本:逐个点名常用命令
@@ -112,7 +124,7 @@ final class MenuStructureTests: XCTestCase {
         _ = try requireMenu()
         let expected = [
             "app.menu.open",
-            "reader.layout.single", "reader.layout.dual",
+            "reader.layout.single", "reader.layout.dual", "reader.layout.scroll",
             "app.menu.coverAlone",
             "reader.direction.ltr", "reader.direction.rtl",
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
@@ -133,7 +145,7 @@ final class MenuStructureTests: XCTestCase {
     func testCommonCommandsCarryShortcuts() throws {
         _ = try requireMenu()
         let keys = [
-            "app.menu.open", "reader.layout.single", "reader.layout.dual",
+            "app.menu.open", "reader.layout.single", "reader.layout.dual", "reader.layout.scroll",
             "reader.direction.ltr", "reader.direction.rtl",
             "app.menu.firstPage", "app.menu.lastPage", "app.menu.jumpToPage",
             "app.menu.thumbnailGrid",

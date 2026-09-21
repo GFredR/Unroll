@@ -142,10 +142,21 @@ struct UnrollApp: App {
                     reader.layout = .dual
                 }
                 .keyboardShortcut("2", modifiers: .command)
+                // 连续滚动(v2 候选池最后一项,2026-09-21)。
+                // 取 ⌘0 而不是 ⌘7:数字键里 3–6 已被缩放档位占满,而 0 与 1/2
+                // **物理相邻** —— 这一组是「怎么排」,下一组是「怎么缩放」,
+                // 中间那条 Divider 就是分界。放在 7 会让它看起来属于缩放那一组
+                Button(L10n.tr("reader.layout.scroll")) {
+                    reader.layout = .scroll
+                }
+                .keyboardShortcut("0", modifiers: .command)
                 // 双页配对口径:日式单行本封面是独立一页,开着才是正确的摊
-                // (见 Core/SpreadPaging.swift 的口径说明)
+                // (见 Core/SpreadPaging.swift 的口径说明)。
+                // 滚动模式下没有「摊」,这一项点了什么也不会发生 —— 灰掉而不是
+                // 留一个空转的开关(单页模式同样无摊,但那是既有行为,不在本次改动内)
                 Toggle(L10n.tr("app.menu.coverAlone"), isOn: $reader.coverAlone)
                     .keyboardShortcut("c", modifiers: [.command, .option])
+                    .disabled(reader.layout == .scroll)
                 Divider()
                 Button(L10n.tr("reader.direction.ltr")) {
                     reader.direction = .leftToRight
@@ -179,23 +190,30 @@ struct UnrollApp: App {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(!reader.canShowGrid)
                 Divider()
-                // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上
+                // 缩放档位(§2.1-4):自由缩放叠加在档位基准之上。
+                // **滚动模式下这四项全部灰掉**:它们定义的是「一摊怎么放进窗口」,
+                // 而连续滚动按宽度铺满、横向是稳定轴,没有「摊」这个单位 ——
+                // 留着会变成四个点了没反应的控件(比灰掉更让人困惑)
                 Button(L10n.tr("reader.fit.window")) {
                     reader.fitMode = .fitWindow
                 }
                 .keyboardShortcut("3", modifiers: .command)
+                .disabled(reader.layout == .scroll)
                 Button(L10n.tr("reader.fit.width")) {
                     reader.fitMode = .fitWidth
                 }
                 .keyboardShortcut("4", modifiers: .command)
+                .disabled(reader.layout == .scroll)
                 Button(L10n.tr("reader.fit.height")) {
                     reader.fitMode = .fitHeight
                 }
                 .keyboardShortcut("5", modifiers: .command)
+                .disabled(reader.layout == .scroll)
                 Button(L10n.tr("reader.fit.actual")) {
                     reader.fitMode = .actualSize
                 }
                 .keyboardShortcut("6", modifiers: .command)
+                .disabled(reader.layout == .scroll)
             }
 
             // 书签(2026-09-15):标记当前页 + 在书签间跳转 + 直达某一页

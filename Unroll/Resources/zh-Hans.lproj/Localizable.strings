@@ -79,6 +79,8 @@
 "app.menu.view" = "视图";
 "reader.layout.single" = "单页";
 "reader.layout.dual" = "双页";
+/* 纵向连续滚动:一行一页,因此与「双页」互斥而不是并列叠加 */
+"reader.layout.scroll" = "连续滚动";
 "app.menu.coverAlone" = "封面单独一页";
 "reader.direction.ltr" = "从左往右读";
 "reader.direction.rtl" = "从右往左读(日漫)";
