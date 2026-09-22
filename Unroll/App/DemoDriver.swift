@@ -11,6 +11,7 @@
 //   demo-grid     → 缩略图网格面板(⇧⌘G)取证
 //   demo-jump     → 页码跳转面板 + 侧边预览(⌥⌘G)取证
 //   demo-scroll   → 连续滚动(⌘0)取证(下行 + 回程,见 runScroll 的判据说明)
+//   demo-export   → 导出本卷页文件(⇧⌘E)面板取证(真导一遍,见 runExport 的判据说明)
 //
 // 为什么用标记文件而不是 argv:`open --args` 在 macOS 15 上实测**传不进 App**
 // (LaunchServices 会过滤未知 argv;2026-09-20 用探针 App 复核 —— 经 `open`
@@ -18,7 +19,7 @@
 // 环境变量 UNROLL_DEMO_SCRIPT 仍作兜底(值 grid/jump 选场景,其它非空值 = 翻页)。
 //
 // 录制脚本见 Scripts/record-demo.sh;
-// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll)。
+// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll / ONLY=export)。
 // 不需要演示时:直接删掉本文件 + UnrollApp.swift 里那一处 #if DEBUG 调用即可。
 //
 // 调试:每个节点写一行到容器 tmp/demo-driver.log
@@ -48,6 +49,8 @@ enum DemoDriver {
         case jump = "demo-jump"
         /// 连续滚动(⌘0)。**必须真的是「滚」**:见 `runScroll` 的判据说明
         case scroll = "demo-scroll"
+        /// 导出本卷页文件(⇧⌘E)。**真导一遍**并数磁盘:见 `runExport` 的判据说明
+        case export = "demo-export"
 
         /// 认全名(`demo-grid`)与简写(`grid`)。**认不出返回 nil**,由调用方决定
         /// 兜底 —— 环境变量那条路的旧语义是「随便给个非空值就翻页」,
@@ -57,6 +60,7 @@ enum DemoDriver {
             case Scene.grid.rawValue, "grid": return .grid
             case Scene.jump.rawValue, "jump": return .jump
             case Scene.scroll.rawValue, "scroll": return .scroll
+            case Scene.export.rawValue, "export": return .export
             default: return nil
             }
         }
@@ -79,7 +83,7 @@ enum DemoDriver {
         // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
         guard !UnrollRuntime.isTesting else { return nil }
 
-        for scene in [Scene.grid, .jump, .scroll, .paging]
+        for scene in [Scene.grid, .jump, .scroll, .export, .paging]
         where FileManager.default.fileExists(atPath: flagURL(for: scene).path) {
             return scene
         }
@@ -147,6 +151,9 @@ enum DemoDriver {
             await runJump(on: vm)
         case .scroll:
             await runScroll(on: vm)
+        case .export:
+            await prepareForProbe(on: vm)
+            await runExport(on: vm)
         }
     }
 
@@ -333,6 +340,86 @@ enum DemoDriver {
             + "first=\(first) mid=\(mid) expectedMid=\(expectedMid) back=\(back) "
             + "loadsBefore=\(loadsBefore) loadsAfter=\(loadsAfter) rowLoads=\(vm.scrollRowLoads) "
             + "aspect=\(String(format: "%.3f", vm.lastKnownAspect))")
+    }
+
+    /// 场景:导出本卷页文件(⇧⌘E)的面板取证。
+    ///
+    /// **判据怎么分**(与 scroll 那条不同,要单独说清):
+    ///   · `written` 来自 `PageSequenceReport.delivered` —— 它是**报告说**写了几页;
+    ///   · `onDisk` 是本驱动自己 `contentsOfDirectory` 数出来的**磁盘事实**。
+    ///     两者必须相等 —— 与网格那条 `thumbs` 是同一个道理:`generated=30` 只说明
+    ///     Kit 交出了 30 份字节,**不等于**磁盘上真有 30 个文件。报告与磁盘是两条路,
+    ///     各验一次才知道它们一致(写盘失败时报告会记 `failed`,但「报告说成功、
+    ///     文件却不在」这种事只有数磁盘才拦得住)。
+    ///   · `covers` = `coversWholeArchive`(delivered + skipped + failed == pages)。
+    ///     这是报告自带的「有没有漏页」判据,**不在这里自己再算一遍** —— 算错的方向
+    ///     恰好是「把没弄完的说成弄完了」。
+    ///
+    /// **为什么不顺带验「按阅读顺序」**:那条性质由 `PageSequenceExportTests` 在
+    /// **无沙盒的 swift test** 里逐字节断言(用的是乱序条目名的 fixture);取证样本的
+    /// 条目名本身有序(`p0001.jpg`…`p0030.jpg`),在这里根本看不出顺序的价值。
+    /// 这一段负责的是**面板本身**,不重复单元测试的活。
+    ///
+    /// ⚠️ **本段明确未覆盖两处**(别把这里的绿读成"导出功能全验了"):
+    ///   ① `running` 中途那一帧 —— 30 页写盘太快,截图竞态赢不了,而为了拍它去
+    ///      人为拖慢导出是本末倒置。「停止」按钮的落点因此仍没进过图;
+    ///   ② 真实入口是 `PageExportPanel` 的 `NSOpenPanel`(**用户选目录**)——
+    ///      驱动直接给了一个目录,所以"选目录那一步"不在本段范围内。
+    private static func runExport(on vm: ReaderViewModel) async {
+        // 目标目录:容器 tmp/ 下的固定子目录。两个理由:
+        //   ① App 在沙盒里对它天然有写权限,不需要走 NSOpenPanel 授权;
+        //   ② verify-ui.sh 认得这个路径,能自己去数一遍文件 —— 于是判据是两条路
+        //      (驱动数一次、脚本再数一次),不是同一条路自证。
+        // 导出前先清空:残留文件会让 onDisk 虚高,而虚高恰好能让「报告与磁盘一致」
+        // 这条判据**假绿** —— 假绿的守卫比没有守卫更糟(§11.9 那条教训的同型)。
+        // 清理放在驱动里而不是脚本里:这是 App 自己的 tmp 子目录,由它自己建、自己清,
+        // 不经任何外部工具的删除配额,也没有"删错用户文件"的可能。
+        let dir = flagDir.appendingPathComponent("export-probe", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        // 等阅读器那枚**页码 HUD** 自己淡出(打开文档后静止 2.5s 消失)。
+        // 不等它的话,它会压在页面上一起进图 —— 而那张图的用途正是"看清面板本身",
+        // HUD 是干扰项。2026-09-22 首次取证实测:导出只花 200ms,不等就一定拍到它。
+        // 这不是给画面加修饰(面板的位置/尺寸/文案一个字没动),只是把"恰好还没消失
+        // 的浮层"等掉。3s 的成本对整个脚本可以忽略。
+        try? await Task.sleep(for: .seconds(3))
+
+        let task = vm.exportPages(to: dir)
+        guard task != nil else {
+            // 真失败(不是前提不满足):文档在、但导出入口不可用。把原因写清楚,
+            // 免得人从"没有状态行"倒推
+            log("scene=export aborted: exportPages 返回 nil "
+                + "(canExport=\(vm.canExportPages) phase=\(String(describing: vm.phase)))")
+            return
+        }
+        log("scene=export sheet=opened")
+
+        // 等导出落定。上限 60s:300 页的包要读要写
+        var ticks = 0
+        while vm.isExportRunning, ticks < 600 {
+            try? await Task.sleep(for: .milliseconds(100))
+            ticks += 1
+        }
+        // 结束 ≠ 画完:给 SwiftUI 一拍把终态摆上去(同 runGrid 的理由),并等任务真正收尾
+        try? await Task.sleep(for: .milliseconds(700))
+        await task?.value
+
+        var written = 0, skipped = 0, failed = 0, pages = vm.pageCount
+        var stop = "nil", covers = 0
+        if let state = vm.exportState, case .ready(let report) = state {
+            written = report.delivered
+            skipped = report.skippedEncrypted
+            failed = report.failedCount
+            pages = report.pages
+            stop = report.stop.token
+            covers = report.coversWholeArchive ? 1 : 0
+        }
+        let onDisk = (try? FileManager.default.contentsOfDirectory(atPath: dir.path))?.count ?? -1
+
+        log("scene=export pages=\(pages) written=\(written) skipped=\(skipped) "
+            + "failed=\(failed) stop=\(stop) covers=\(covers) onDisk=\(onDisk) "
+            + "waited=\(ticks * 100)ms")
     }
 }
 #endif

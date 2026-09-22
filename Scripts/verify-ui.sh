@@ -6,7 +6,7 @@
 #   ./Scripts/verify-ui.sh                 # 拍全套截图到 docs/
 #   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
 #   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
-#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg)
+#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg|grid|jump|scroll|export)
 #
 # 为什么要有这个脚本:
 #   交付前有几处只能靠"看"来判定的东西 —— 空态长什么样、加密归档的密码框长什么样、
@@ -44,8 +44,8 @@ if [ "$#" -gt 0 ]; then
     echo "✗ 不接受位置参数:$*" >&2
     echo "  这几个是环境变量,要写在命令**前面**:" >&2
     echo "    ONLY=<段名> APP=<.app> OUT_DIR=<目录> $0" >&2
-    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll" >&2
-    echo "  (grid / jump / scroll 需要可驱动的 Debug 版,见文末说明)" >&2
+    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll | export" >&2
+    echo "  (grid / jump / scroll / export 需要可驱动的 Debug 版,见文末说明)" >&2
     exit 2
 fi
 
@@ -144,7 +144,14 @@ trap 'reset_session 2>/dev/null || true; cleanup_probe_flags' EXIT
 # 而且不知道是谁干的。所以挂进 trap,中途 exit 也照清。
 cleanup_probe_flags() {
     local dir="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
-    rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" 2>/dev/null || true
+    # ⚠️ 这里必须**逐个列全**每一个标记文件名。漏掉的那个会让 App 在用户**下一次
+    #    正常启动**时自己跑起演示,而用户不知道是谁干的 —— 正是本函数要防的事。
+    #    2026-09-22 发现:demo-scroll 当年加进 DemoDriver 时漏在了这里(只清到
+    #    demo-jump)。所以新增场景时有一条联动纪律:
+    #      **DemoDriver.Scene 加一个 case → 本行就必须加一个文件名**
+    #    两处不联动就是「跑完没清干净」的复发点,而它没有任何报错。
+    rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" \
+          "$dir/demo-scroll" "$dir/demo-export" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------ 空态 --
@@ -412,8 +419,13 @@ fi
 # 「一列铺开」这个版式特征在截图里根本显现不出来(那不是拍得不好,是几何)。
 # 换成 1600x600 的宽幅页,行高约 0.66 屏,一帧能看到一行半,间距与连续关系都可见。
 # 这是**选样本**让性质可观测,不是给性质加修饰。
-if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ]; then
-    head2 "缩略图网格 / 跳转预览取证(ONLY=$ONLY)"
+# ONLY=export(导出本卷页文件 ⇧⌘E,2026-09-22 补)也走标记文件,但**判据重心不同**:
+# 它多一条「报告 ↔ 磁盘」两条路对照 —— 驱动自己数一次磁盘(`onDisk`)、本脚本
+# 再数一次,与报告的 `written` 三方对齐。理由与网格那条 `thumbs` 完全一样:
+# 报告说写了 N 页**不等于**磁盘上真有 N 个文件,而「报告对、磁盘空」恰恰是
+# 判据最容易放过的那类假绿。样本沿用网格那份 30 页(观感真实、进度有内容)。
+if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] || [ "$ONLY" = "export" ]; then
+    head2 "面板取证:网格 / 跳转预览 / 连续滚动 / 导出(ONLY=$ONLY)"
 
     PROBE_TMP="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
     DRIVER_LOG="$PROBE_TMP/demo-driver.log"
@@ -453,6 +465,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ]; then
     grid)   SCENE="grid";   SHOT="shot-grid-panel.png";     WAIT_PAT="scene=grid pages=" ;;
     jump)   SCENE="jump";   SHOT="shot-jump-preview.png";   WAIT_PAT="scene=jump current=" ;;
     scroll) SCENE="scroll"; SHOT="shot-continuous-scroll.png"; WAIT_PAT="scene=scroll layout=" ;;
+    export) SCENE="export"; SHOT="shot-export-panel.png";   WAIT_PAT="scene=export pages=" ;;
     esac
 
     quit_app
@@ -539,7 +552,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ]; then
         [ "${J_FAIL:-1}" = "0" ] && [ "${J_LOAD:-1}" = "0" ] \
             && ok "预览不是失败态也不是转圈态" \
             || bad "预览停在异常态:failure=$J_FAIL loading=$J_LOAD"
-    else
+    elif [ "$ONLY" = "scroll" ]; then
         S_LAYOUT="$(field layout)"; S_FIRST="$(field first)"; S_MID="$(field mid)"
         S_EXPECT="$(field expectedMid)"; S_BACK="$(field back)"
         S_BEFORE="$(field loadsBefore)"; S_AFTER="$(field loadsAfter)"
@@ -562,6 +575,55 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ]; then
             ok "视口确实移动过并渲染了新行(rowLoads $S_BEFORE → $S_AFTER)"
         else
             bad "行视图没有为新位置取图:$S_BEFORE → ${S_AFTER:-nil}(视口可能没动)"
+        fi
+    else
+        # ---- 导出本卷页文件:判据的重心是「报告 ↔ 磁盘」的对照 ----------------
+        E_PAGES="$(field pages)"; E_WRITTEN="$(field written)"; E_SKIP="$(field skipped)"
+        E_FAIL="$(field failed)"; E_STOP="$(field stop)"; E_COVERS="$(field covers)"
+        E_ONDISK="$(field onDisk)"
+
+        if [ "${E_STOP:-nil}" = "full" ]; then
+            ok "导出正常结束(stop=full)"
+        else
+            bad "导出没跑完:stop=${E_STOP:-nil}(nil = 60s 内没等到结束)"
+        fi
+
+        # 「有没有漏页」用报告自带的 coversWholeArchive(delivered+skipped+failed==pages),
+        # **不在这里自己再算一遍** —— 算错的方向恰好是「把没弄完的说成弄完了」
+        [ "${E_COVERS:-0}" = "1" ] && ok "报告覆盖全档(交付 + 跳过 + 坏页 = 总页数)" \
+            || bad "报告没覆盖全档:pages=$E_PAGES written=$E_WRITTEN skipped=$E_SKIP failed=$E_FAIL"
+
+        # 这一段的核心:「报告说写了 N」与「磁盘上真有 N」是**两条路**。
+        # 报告对而磁盘空的时候,上面两条照样全绿 —— 那正是判据最容易放过的假绿
+        [ "${E_ONDISK:-x}" = "${E_WRITTEN:-y}" ] && ok "磁盘文件数与报告一致:$E_ONDISK" \
+            || bad "报告与磁盘不符:written=$E_WRITTEN onDisk=$E_ONDISK(报告说写了、磁盘上却没有)"
+
+        [ "${E_FAIL:-1}" = "0" ] && [ "${E_SKIP:-1}" = "0" ] \
+            && ok "样本无坏页无加密页(failed=0 skipped=0)" \
+            || bad "不该有失败/跳过:failed=$E_FAIL skipped=$E_SKIP"
+
+        # 第二条路(与驱动那条独立):脚本自己再数一次那个目录,并与报告三方对齐。
+        # 目录不存在时只提示、不判红 —— 容器被清理过不该被说成功能坏了
+        EXPORT_DIR="$PROBE_TMP/export-probe"
+        if [ -d "$EXPORT_DIR" ]; then
+            E_SCRIPT_N="$(find "$EXPORT_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')"
+            [ "${E_SCRIPT_N:-0}" = "${E_WRITTEN:-y}" ] && ok "脚本复数的文件数一致:$E_SCRIPT_N(同一份数据量的第二次口径)" \
+                || bad "脚本复数与报告不符:脚本=$E_SCRIPT_N 报告=${E_WRITTEN:-nil}"
+            if [ "${E_SCRIPT_N:-0}" -gt 0 ] 2>/dev/null; then
+                E_FIRST="$(find "$EXPORT_DIR" -type f 2>/dev/null | sort | head -1)"
+                E_LAST="$(find "$EXPORT_DIR" -type f 2>/dev/null | sort | tail -1)"
+                info "导出首/尾:$(basename "${E_FIRST:-?}") / $(basename "${E_LAST:-?}")"
+                # 命名规则抽查(补零页号 + 原扩展名)。**只抽查首尾** ——
+                # 「按阅读顺序」那条性质由 swift test 逐字节断言(乱序条目名 fixture),
+                # 本段样本的条目名本身有序,在这里看不出顺序的价值
+                case "$(basename "${E_FIRST:-}")" in
+                    *-p001.*) ok "首个文件名是补零的第 1 页" ;;
+                    *)        bad "首个文件名不合「补零页号」规则:$(basename "${E_FIRST:-?}")" ;;
+                esac
+            fi
+            info "导出文件留在:$EXPORT_DIR(不在仓库内;下次取证时由驱动清空重建)"
+        else
+            info "导出目录不存在 —— 跳过脚本侧复数:$EXPORT_DIR"
         fi
     fi
 
