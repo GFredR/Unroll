@@ -51,7 +51,7 @@ The numbers below come from a benchmark that drives the real page pipeline throu
 | `.cbz` (ZIP) | 200 | **0.15 GB** | 2.6 ms |
 | `.cb7` (solid 7z) | 200 | **0.06 GB** | 2.4 ms |
 
-Sitting on page 1 of a **437 MB** archive, the shipped app holds **183 MB** resident. The app is **2.18 MB** on disk (a 1.61 MB main binary plus ~0.5 MB for the two Quick Look extensions); the DMG size is filled in after this version is rebuilt (the previous one was 812 KB).
+Sitting on page 1 of a **437 MB** archive, the shipped app holds **183 MB** resident. The app is **2.18 MB** on disk (a 1.61 MB main binary plus ~0.5 MB for the two Quick Look extensions); the DMG is **972 KB** (1.0.1's was 812 KB).
 
 The number worth reading twice is the one behind the sequential scanner. Reopening the archive for each page — the obvious way to build this — is **71× slower** by page 150 on a solid 7z archive, and the gap widens as the archive grows, because solid compression means every page drags the ones before it. That is why pages are pulled through a single streaming pass instead.
 
