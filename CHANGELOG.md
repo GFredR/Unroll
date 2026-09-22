@@ -2,7 +2,9 @@
 
 ## 1.1.0 — 2026-09-21 · 首次公开发布 / First public release
 
-**首次公开发布。** 它包含 1.0.x 那条线的全部内容（下面各段），外加本版新落地的三项——缩略图网格、跳转面板就地预览、连续滚动——以及滚动模式带出来的一个横向裁切修复。
+**首次公开发布。** 它包含 1.0.x 那条线的全部内容（下面各段），外加本版新落地的四项——缩略图网格、跳转面板就地预览、连续滚动、导出本卷页文件——以及滚动模式带出来的一个横向裁切修复。
+
+> **发布状态（2026-09-22）**：本版**尚未打 tag、尚未推送**（仓库当前没有远程）。2026-09-21 首建产物之后又落了「导出本卷页文件」，所以 `.app` / DMG 需要按新 HEAD 重建（见 `docs/发布清单.md` §2）。冻结发布内容前请先确认下面四条都在。
 
 **中文**
 - **连续滚动**（`⌘0`）——竖向一列，一页接一页。滚动位置与页码是**同一份状态**：视口驱动页码、跳页也带动视口，两者不可能对不上；只有视口附近的几行保留全分辨率图，出窗的行主动交还像素，这才是长距离滚动仍守在内存预算内的原因。缩放四档与「封面单独一页」描述的是「摊怎么放进窗口」，在滚动模式下会一并灰掉
@@ -12,6 +14,8 @@
 - **跳转面板就地预览**（`⌥⌘G`）——输入页码时就地显示那一页，输错当场看得见，不必先跳过去再退回来。停止输入 300ms 才解码（不会每敲一个字符解一次）；网格里已经有那一页时直接复用，不再解码第二遍
 - 新增「显示 → 缩略图网格」菜单项；网格面板里可随时**停止**生成、也可**重新生成**；换书或重新生成都会作废旧的一批缩略图
 - 网格生成进度与四种停止原因（扫完了 / 内存到顶 / 你叫停的 / 包坏得走不下去）**分别说明** —— 合成一句必然要说谎
+- **导出本卷页文件**（`⇧⌘E`）—— 把**这一卷的每一页**按阅读顺序导成图片文件，**原始字节直通**：不解码、不重新编码、不合成。与 `⌘S`「另存当前页」是一对分工：`⌘S` 存的是**屏幕上那一摊**（双页会并成一张、JPEG 会重编码，要的是"所见即所得"），`⇧⌘E` 存的是**归档里的每一页**（要的是"原素材"）—— 把跨页彩图导成两张还是合成一张，本来就是两种真实需求。文件名是「归档名 + 补零页号 + 扩展名」（`vol01-p003.png`），排出来就是阅读顺序；扩展名优先用条目原名，原名给不出时按文件头（魔数）判断，认不出来就如实标 `.bin` 而不是猜一个 `.jpg`。加密页**跳过而不算损坏**（界面会分别说明"跳过 N 页加密页"与"有 N 页读不出来"）；写不出去（没权限 / 没空间）**立即停下并如实说是写入失败**，不会接着把剩下的页读完、最后报一句"200 页全失败"。选完目录即可停止，已写出的文件保留
+- **这一版顺带收回一条错的免除理由**：早先"不做整包导出"的依据是"整包解压可以交给系统归档工具"。实情是系统归档工具**压根不认 RAR**（`cbr` 没有兜底），而且**就算能解，解出来的也不是我们要的东西** —— 解出的是归档顺序（`page10` 排在 `page1` 前面）加上 `__MACOSX` / `.DS_Store` / `note.txt` 这类条目；「哪些算页」与「页的先后」只有阅读器自己知道
 
 **English**
 - **Continuous scroll** (`⌘0`) — one vertical column, page after page. The scroll position and the page number are the **same state** (the viewport drives the counter and a jump moves the viewport), so the two can never disagree. Only the rows near where you are keep full-resolution images; rows leaving the viewport hand their pixels back, which is what keeps a long scroll inside the memory budget. The zoom modes and cover-alone describe how a *spread* fits the window, so they are greyed out here.
@@ -21,6 +25,8 @@
 - **Preview in the go-to-page panel** (`⌥⌘G`) — typing a page number shows that page in place, so a typo is visible before you commit. Decoding waits 300 ms after you stop typing; if the thumbnail grid already has that page it is reused instead of decoded twice.
 - New "View → Thumbnail grid" menu item. The panel can **stop** generation at any time and **regenerate** on demand; opening another archive or regenerating discards the previous batch.
 - Progress and the four stop reasons (finished / memory ceiling / cancelled by you / archive unreadable) are reported **separately** — collapsing them into one message would have to lie about at least one.
+- **Export every page of the volume** (`⇧⌘E`) — writes **every page** to image files in reading order, **passing the original bytes through untouched**: no decoding, no re-encoding, no compositing. It is one half of a pair with `⌘S` "Save current page": `⌘S` saves **the spread you are looking at** (two pages become one image, JPEG gets re-encoded — it is meant to be what-you-see-is-what-you-get), while `⇧⌘E` saves **every page in the archive** (it is meant to be the source material). Exporting a double-page spread as two files or as one was always two legitimate needs. Files are named `<archive>-p003.png` (zero-padded page number), so they sort in reading order; the extension comes from the entry's own name when it has one, otherwise from the file's magic number, and falls back to `.bin` rather than guessing `.jpg`. Encrypted pages are **skipped, not counted as damage** (the panel reports "N encrypted pages skipped" and "N pages unreadable" separately); a failed write (no permission / no space) **stops immediately and says the write failed**, instead of ploughing through the rest and reporting "200 pages failed". You can stop at any point — files already written are kept.
+- **And it retracts a bad excuse**: the original reason for "no bulk export" was that the system archive tool could do it. In fact the system tool **does not handle RAR at all** (no fallback for `cbr`), and **even where it does, its output is not what we need** — you get the archive's physical order (`page10` before `page1`) plus `__MACOSX` / `.DS_Store` / `note.txt` entries. Which entries count as pages, and in what order, is something only the reader knows.
 
 ## 1.0.1 — 2026-09-17 · 本机里程碑，从未对外发布 / Local milestone, never published
 
