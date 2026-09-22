@@ -8,6 +8,28 @@
 "reader.empty.hint" = "Drop a .cbz / .cbr / .cb7 / .cbt comic archive,\nor a plain .zip / .rar / .7z / .tar — double-click in Finder works too.";
 "reader.empty.open" = "Open File…";
 
+/* Discoverability (2026-09-22): there are 23 shortcut-carrying menu commands
+   and no way to see them without opening the menu bar. The empty state is the
+   one moment the user is actually sitting still — so the highest-value
+   shortcuts go here.
+   Only five (⌘0 / ⇧⌘G / ⌥⌘G and friends: you would not guess they exist);
+   the full list lives under Help → Keyboard Shortcuts. */
+"reader.empty.shortcuts.title" = "Keyboard Shortcuts";
+"reader.empty.shortcuts.list" = "Space turns pages · ⌘0 continuous scroll · ⇧⌘G thumbnails · ⌥⌘G go to page · ⌘D bookmark";
+
+/* Recent (2026-09-22): the data was always there — the Open Recent menu has
+   used it all along, yet the empty state only offered a blank drop zone. */
+"reader.empty.recents.title" = "Recent";
+
+/* First-read tip bar (2026-09-22): one line above the canvas, shown
+   automatically exactly once ("Help → Show Reading Tips" brings it back).
+   It covers what is NOT in the menu bar — the empty-state cheat sheet covers
+   keys you forget exist, the full list is under Help → Keyboard Shortcuts,
+   and the three surfaces deliberately do not overlap. */
+"reader.hint.gestures" = "Click either half to turn · swipe to turn · double-click or pinch to zoom";
+"reader.hint.all" = "All shortcuts (⌘?)";
+"reader.hint.dismiss" = "Dismiss (it will not come back on its own)";
+
 /* Opening */
 "reader.opening" = "Opening…";
 
@@ -229,3 +251,34 @@
 "reader.export.remaining" = "%ld pages were not processed.";
 "reader.export.stop" = "Stop";
 "reader.export.done" = "Done";
+
+/* ============ Help (2026-09-22: discoverability) ============ */
+/* Menu titles. ⌘? follows the system convention: press the Help keys, get this table */
+"help.menu.shortcuts" = "Keyboard Shortcuts…";
+"help.menu.showTips" = "Show Reading Tips";
+"help.menu.homepage" = "Project Homepage";
+
+"help.shortcuts.title" = "Keyboard Shortcuts";
+/* ⚠️ This sentence is **checkable**: every catalog entry carrying ⌘ has a real
+   menu item, and the five that do not carry ⌘ have none. A test asserts
+   that "contains ⌘" equals "hasMenuItem" — so this line must not claim
+   "everything below" (the last group would make that a false statement). */
+"help.shortcuts.subtitle" = "Anything with ⌘ is also in the menu bar";
+"help.shortcuts.done" = "Done";
+
+/* Group titles (one-to-one with the group ids in Core/ShortcutCatalog.swift) */
+"help.shortcut.group.file" = "File";
+"help.shortcut.group.layout" = "Layout & direction";
+"help.shortcut.group.navigate" = "Navigate";
+"help.shortcut.group.zoom" = "Zoom";
+"help.shortcut.group.bookmark" = "Bookmarks";
+"help.shortcut.group.gesture" = "Canvas gestures (not in the menu)";
+
+/* The five with no menu item. ⚠️ A typo here is caught by no test
+   (there is no menu entry to compare against) — check them against
+   ReaderView's key monitor and gestures whenever you touch this block */
+"help.shortcut.turnPage" = "Turn pages (previous / next)";
+"help.shortcut.wheelSwipe" = "Scroll wheel / trackpad swipe to turn pages";
+"help.shortcut.halfClick" = "Click the left / right half to turn pages";
+"help.shortcut.doubleClick" = "Double-click to zoom 1× ↔ 2×";
+"help.shortcut.pinch" = "Pinch to zoom; drag to pan when zoomed";

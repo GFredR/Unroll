@@ -208,4 +208,119 @@ final class MenuStructureTests: XCTestCase {
         if mask.contains(.command) { text += "⌘" }
         return text + (parts.count > 1 ? String(parts[1]) : "")
     }
+
+    // MARK: - 快捷键清单(帮助面板 / 空态小抄)必须与真实菜单一致
+
+    /// `ShortcutCatalog` 是「帮助 → 键盘快捷键…」面板与空态小抄的展示源。
+    /// 它**是手抄的**(从 `UnrollApp.commands` 抄一份) —— 手抄本身不是问题,
+    /// **抄完没人钉**才是:那份清单错了用户会一直照着看,而没有任何东西会报错。
+    ///
+    /// 所以这里把真实菜单项的 (keyEquivalent, modifierMask) 格式化成同一个
+    /// 「⌃⌥⇧⌘ + 键位」串,与清单里的字面量**逐字对照** —— 改菜单忘改清单、
+    /// 改清单忘改菜单,两个方向的分叉都当场红(2026-09-22)
+    func testShortcutCatalogMatchesTheRealMenu() throws {
+        _ = try requireMenu()
+        let items = ShortcutCatalog.verifiableItems
+        XCTAssertFalse(items.isEmpty, "清单空了 —— 这条对照测试会退化成空转")
+        for item in items {
+            let title = L10n.tr(item.id)
+            guard let menu = menuItem(titled: title) else {
+                XCTFail("快捷键清单里有「\(title)」(\(item.id)),但菜单里没有这一项")
+                continue
+            }
+            XCTAssertEqual(combination(of: menu), item.shortcut,
+                           "「\(title)」的组合键与清单不符"
+                           + "(菜单=\(combination(of: menu)),清单=\(item.shortcut))")
+        }
+    }
+
+    /// 帮助菜单(2026-09-22)。macOS 用户的肌肉记忆是「不知道就翻菜单栏 Help」,
+    /// 而这里原先**什么都没有**。三项都要在,且各自的键位约定要对:
+    ///   · 键盘快捷键… 带 ⌘?(系统惯例:⇧/ 打出 ?);
+    ///   · 显示阅读提示 **刻意不带键位**;
+    ///   · 项目主页只是打开链接。
+    /// **顺序也钉住**:三个入口的排列就是「看全部 → 重看那一条 → 去主页」。
+    func testHelpMenuCarriesItsThreeEntriesInOrder() throws {
+        _ = try requireMenu()
+        let shortcutTitle = L10n.tr("help.menu.shortcuts")
+        let menu = try XCTUnwrap(menuItem(titled: shortcutTitle)?.menu,
+                                 "菜单栏里找不到帮助菜单(「\(shortcutTitle)」不在任何子菜单里)")
+
+        // 帮助菜单里还有系统自己塞的项(搜索框等),所以只断言"我们这三项都在,且相对顺序对"
+        let titles = menu.items.filter { !$0.isSeparatorItem }.map(\.title)
+        let tipsTitle = L10n.tr("help.menu.showTips")
+        let homeTitle = L10n.tr("help.menu.homepage")
+        let positions = [shortcutTitle, tipsTitle, homeTitle].compactMap { titles.firstIndex(of: $0) }
+        XCTAssertEqual(positions.count, 3, "帮助菜单里缺项,实际是:\(titles)")
+        if positions.count == 3 {
+            XCTAssertEqual(positions, positions.sorted(), "帮助菜单三项的顺序变了:\(titles)")
+        }
+
+        let shortcutItem = try XCTUnwrap(menuItem(titled: shortcutTitle))
+        XCTAssertEqual(shortcutItem.keyEquivalent, "?")
+        XCTAssertEqual(shortcutItem.keyEquivalentModifierMask, .command)
+
+        // ⚠️ 「没有键位」是**设计决定**,不是遗漏:快捷键清单的口径是
+        //    「带 ⌘ 的命令 + 纯手势」,`ShortcutCatalog` 正是照这个口径手抄的。
+        //    哪天给它配了键位,这条会红 —— 提醒你同时把它加进清单,
+        //    否则清单就不再是"完整的"了(而它存在的意义恰恰是完整)
+        let tipsItem = try XCTUnwrap(menuItem(titled: tipsTitle), "帮助菜单里缺少「\(tipsTitle)」")
+        XCTAssertTrue(tipsItem.keyEquivalent.isEmpty,
+                      "「\(tipsTitle)」不该有快捷键 —— 配了就得同时进 Core/ShortcutCatalog")
+    }
+
+    /// 快捷键清单的**成清单口径**:凡带 ⌘ 的条目都在菜单栏里有对应项,
+    /// 不带 ⌘ 的那 5 条恰恰都没有(它们是画布手势)。
+    ///
+    /// 面板的说明文字 `help.shortcuts.subtitle` 就写在这条恒等式上
+    /// (「带 ⌘ 的都能在菜单栏里找到」)——2026-09-22 之前它写的是
+    /// 「下面这些都能在菜单栏里找到」,而那对手势那组是假话。
+    /// 文字本身没法被断言,能断言的是它依赖的这个事实
+    func testCatalogMenuFlagsMatchTheCommandKey() {
+        for item in ShortcutCatalog.groups.flatMap(\.items) {
+            XCTAssertEqual(item.shortcut.contains("⌘"), item.hasMenuItem,
+                           "\(item.id):组合串「\(item.shortcut)」与 hasMenuItem="
+                           + "\(item.hasMenuItem) 不符(带 ⌘ 就该有菜单项;没有菜单项就不该带 ⌘)")
+        }
+    }
+
+    /// 清单里每个 id 都必须**真的取到文案**。
+    /// `NSLocalizedString` 对缺失的 key 会**原样回退成 key 串** ——
+    /// 于是 `tr(id) != id` 正好是「这个 key 真的在 strings 里」的判据。
+    /// 对没进菜单的那 5 条尤其要紧:它们没有对照物,漏文案不会被别的测试逮到
+    func testEveryShortcutCatalogEntryHasLocalizedText() {
+        for group in ShortcutCatalog.groups {
+            XCTAssertNotEqual(L10n.tr(group.id), group.id, "缺少分组文案:\(group.id)")
+            for item in group.items {
+                XCTAssertNotEqual(L10n.tr(item.id), item.id, "缺少文案:\(item.id)")
+                XCTAssertFalse(item.shortcut.isEmpty, "\(item.id) 的组合串是空的")
+            }
+        }
+    }
+
+    // MARK: - 组合串格式化(与 ShortcutCatalog 同一口径)
+
+    /// 把菜单项格式化成 `ShortcutCatalog` 里那种组合串(⌃⌥⇧⌘ 固定顺序 + 键位)
+    private func combination(of item: NSMenuItem) -> String {
+        var text = ""
+        let mask = item.keyEquivalentModifierMask
+        if mask.contains(.control) { text += "⌃" }
+        if mask.contains(.option) { text += "⌥" }
+        if mask.contains(.shift) { text += "⇧" }
+        if mask.contains(.command) { text += "⌘" }
+        return text + keyLabel(item.keyEquivalent)
+    }
+
+    /// 键位的人类可读形式。方向键在 AppKit 里是 Unicode 私有区的字符
+    /// (`NSUpArrowFunctionKey` 等),原样打出来是一串乱码 —— 必须映射,
+    /// 否则 ⇧⌘↑ / ⇧⌘↓ 那两条会被判成"不一致"
+    private func keyLabel(_ raw: String) -> String {
+        switch raw {
+        case "\u{F700}": return "↑"
+        case "\u{F701}": return "↓"
+        case "\u{F702}": return "←"
+        case "\u{F703}": return "→"
+        default: return raw.uppercased()
+        }
+    }
 }

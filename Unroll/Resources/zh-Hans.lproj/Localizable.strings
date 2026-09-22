@@ -8,6 +8,25 @@
 "reader.empty.hint" = "拖入 .cbz / .cbr / .cb7 / .cbt 漫画包,\n裸的 .zip / .rar / .7z / .tar 也认 —— 或在访达中双击打开。";
 "reader.empty.open" = "打开文件…";
 
+/* 可发现性(2026-09-22):菜单栏里有 23 条**带快捷键的**命令,不翻菜单就完全看不见,
+   而空态是用户唯一「停在这里、手上没事」的时刻 —— 把最有发现价值的几条放这里。
+   只列 5 条(⌘0 / ⇧⌘G / ⌥⌘G 这类:不看到就想不起它存在);
+   完整清单在「帮助 → 键盘快捷键…」 */
+"reader.empty.shortcuts.title" = "常用快捷键";
+"reader.empty.shortcuts.list" = "空格 翻页 · ⌘0 连续滚动 · ⇧⌘G 缩略图 · ⌥⌘G 跳页 · ⌘D 书签";
+
+/* 最近打开(2026-09-22):数据本来就存着(菜单「打开最近」一直在用),
+   空态原先只给一个空白拖放框 —— 明明有历史,打开 App 还得重新找一遍文件 */
+"reader.empty.recents.title" = "最近打开";
+
+/* 首次阅读提示条(2026-09-22):贴在画布上方的一行,只自动出现一次
+   (重看入口在「帮助 → 显示阅读提示」)。它专讲**菜单里没有**的动作 ——
+   空态小抄讲"菜单里有、但想不起存在的键",完整清单在「帮助 → 键盘快捷键…」,
+   三个展示面刻意不重叠 */
+"reader.hint.gestures" = "点左右半屏翻页 · 滑动翻页 · 双击或捏合缩放";
+"reader.hint.all" = "全部快捷键（⌘?）";
+"reader.hint.dismiss" = "关闭提示（以后不再自动出现）";
+
 /* 打开中 */
 "reader.opening" = "正在打开…";
 
@@ -227,3 +246,34 @@
 "reader.export.remaining" = "还有 %ld 页没有处理。";
 "reader.export.stop" = "停止";
 "reader.export.done" = "完成";
+
+/* ============ 帮助(2026-09-22:可发现性三件套) ============ */
+/* 菜单项标题。⌘? 取系统惯例 —— 用户按"帮助"那两个键,得到的就是这张表 */
+"help.menu.shortcuts" = "键盘快捷键…";
+"help.menu.showTips" = "显示阅读提示";
+"help.menu.homepage" = "项目主页";
+
+/* 面板标题与说明 */
+"help.shortcuts.title" = "键盘快捷键";
+/* ⚠️ 这句是**可核对的**:清单里凡带 ⌘ 的条目都在菜单栏里有对应项,
+   不带 ⌘ 的那 5 条恰恰都没有(ShortcutCatalog 的 hasMenuItem 标记
+   与"组合串里有没有 ⌘"由测试断言恒等)。所以不能写成"下面这些都能
+   在菜单栏里找到" —— 那样最后一组就成了假话 */
+"help.shortcuts.subtitle" = "带 ⌘ 的都能在菜单栏里找到";
+"help.shortcuts.done" = "完成";
+
+/* 分组标题(与 Core/ShortcutCatalog.swift 的 group id 一一对应) */
+"help.shortcut.group.file" = "文件";
+"help.shortcut.group.layout" = "排版与方向";
+"help.shortcut.group.navigate" = "定位与浏览";
+"help.shortcut.group.zoom" = "缩放";
+"help.shortcut.group.bookmark" = "书签";
+"help.shortcut.group.gesture" = "画布手势（菜单里没有）";
+
+/* 无菜单项的几条。⚠️ 它们写错不会有测试拦(菜单里没有对照物),
+   改这里时请对着 ReaderView 的键盘监视器与手势实现核一遍 */
+"help.shortcut.turnPage" = "翻页（前一页 / 后一页）";
+"help.shortcut.wheelSwipe" = "滚轮 / 触控板横扫翻页";
+"help.shortcut.halfClick" = "点窗口左右半屏翻页";
+"help.shortcut.doubleClick" = "双击缩放 1× ↔ 2×";
+"help.shortcut.pinch" = "捏合缩放，放大后拖拽平移";

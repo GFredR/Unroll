@@ -18,17 +18,24 @@ final class ReaderViewModelTests: XCTestCase {
     private static let suiteName = "test.readervm.progress"
     /// 书签同样要隔离:它也会持久化,走宿主真实偏好一样会跨用例污染
     private static let bookmarkSuiteName = "test.readervm.bookmarks"
+    /// 一次性提示的标记(2026-09-22)。同样必须隔离 ——
+    /// 不隔离的话,单测每开一次文档就往宿主的真实偏好里写一笔,
+    /// 而且是**用户永远看不到第二次**的那种写(提示条只自动出现一次)
+    private static let tipsSuiteName = "test.readervm.tips"
 
     /// reuseProgress = true 时保留已有进度(专供「续读恢复」用例模拟重开)
     private func makeViewModel(reuseProgress: Bool = false) -> ReaderViewModel {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
         let bookmarkDefaults = UserDefaults(suiteName: Self.bookmarkSuiteName) ?? .standard
+        let tipsDefaults = UserDefaults(suiteName: Self.tipsSuiteName) ?? .standard
         if !reuseProgress {
             defaults.removePersistentDomain(forName: Self.suiteName)
             bookmarkDefaults.removePersistentDomain(forName: Self.bookmarkSuiteName)
+            tipsDefaults.removePersistentDomain(forName: Self.tipsSuiteName)
         }
         return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults),
-                               bookmarkStore: Bookmarks(defaults: bookmarkDefaults))
+                               bookmarkStore: Bookmarks(defaults: bookmarkDefaults),
+                               tips: ReaderTips(defaults: tipsDefaults))
     }
 
     private func progressStore() -> ReadingProgress {
@@ -37,6 +44,11 @@ final class ReaderViewModelTests: XCTestCase {
 
     private func bookmarkStore() -> Bookmarks {
         Bookmarks(defaults: UserDefaults(suiteName: Self.bookmarkSuiteName) ?? .standard)
+    }
+
+    /// 与 makeViewModel 同一个 suite —— 「只出现一次」的跨实例断言要靠它
+    private func tipsStore() -> ReaderTips {
+        ReaderTips(defaults: UserDefaults(suiteName: Self.tipsSuiteName) ?? .standard)
     }
 
     private func cleanProgress() {
@@ -882,5 +894,106 @@ final class ReaderViewModelTests: XCTestCase {
 
         XCTAssertEqual(vm.pageIndex, 0)
         XCTAssertEqual(vm.scrollTarget, 0, "视口要跟着回第 0 页,而不是停在上一本的 2")
+    }
+
+    // MARK: - 首次阅读提示条(2026-09-22)
+
+    /// 这一节五条用例合起来才说明问题,单看任何一条都会被误读:
+    ///   ① 第一次打开会出现(并且**标记在出现时就写**);
+    ///   ② 打不开的文件不消耗这次机会;
+    ///   ③ 以后再打开不会自己回来(哪怕换了本书、换了实例);
+    ///   ④ 但手动「显示阅读提示」随时能调出来;
+    ///   ⑤ 手动调出来的那个不受换书影响。
+    /// ③④ 缺一,提示条要么变成每次启动都挡视线的浮层,要么变成找不回的一次性信息。
+    private func plainArchive() throws -> URL {
+        let url = Self.fixturesDir.appendingPathComponent("plain.cbz")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("fixture 不可达(疑似测试宿主沙盒限制)")
+        }
+        return url
+    }
+
+    func testHintBarAppearsOnFirstOpenAndIsMarkedShown() async throws {
+        let url = try plainArchive()
+        let vm = makeViewModel()
+        XCTAssertFalse(vm.isHintBarVisible, "没打开文档时不该有提示条")
+
+        await vm.open(url: url).value
+
+        XCTAssertTrue(vm.isHintBarVisible, "第一次读一本书,提示条该出现")
+        XCTAssertTrue(vm.didAutoShowHintBar,
+                      "这一次是「它自己」出现的 —— 与「菜单调出来」分开记,取证要用")
+        XCTAssertTrue(tipsStore().hasShownHintBar,
+                      "标记必须**在出现时**就落盘 —— 押在「用户点了 ×」上的话,"
+                      + "看过但直接 ⌘Q 的人下次启动还会再看一遍")
+    }
+
+    /// 打不开的文件不该消耗掉这次机会:首次提示要留给**第一次真正开始阅读**
+    func testFailedOpenDoesNotConsumeTheOneShot() async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("unroll-hint-garbage-\(UUID().uuidString).bin")
+        try Data("not an archive".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+
+        guard case .failed = vm.phase else { return XCTFail("垃圾文件应以 .failed 收场") }
+        XCTAssertFalse(vm.isHintBarVisible, "没进入阅读态就不该出现提示条")
+        XCTAssertFalse(vm.didAutoShowHintBar)
+        XCTAssertFalse(tipsStore().hasShownHintBar, "打开失败不该用掉这一次")
+    }
+
+    func testHintBarDoesNotComeBackOnLaterOpens() async throws {
+        let url = try plainArchive()
+
+        let first = makeViewModel()
+        await first.open(url: url).value
+        XCTAssertTrue(first.isHintBarVisible)
+        XCTAssertTrue(first.didAutoShowHintBar, "第一次是自动出现")
+        first.dismissHintBar()
+        XCTAssertFalse(first.isHintBarVisible)
+
+        // 换本书(同一份隔离存储,模拟"下次启动"):一次性标记已落盘 → 不再自动出现
+        let second = makeViewModel(reuseProgress: true)
+        await second.open(url: url).value
+        XCTAssertFalse(second.didAutoShowHintBar, "第二次不该再自动出现")
+        XCTAssertFalse(second.isHintBarVisible,
+                       "提示条只该自动出现一次 —— 之后要靠「帮助 → 显示阅读提示」")
+    }
+
+    /// 关掉之后还能不能再调出来。用**第二次打开**当舞台:那一次打开不是自动的
+    /// (`didAutoShowHintBar` 为 false),于是"手动调出来"与"自己出现"这两个事实
+    /// 同时可观察 —— 这正是 UI 取证要它们分开的原因
+    func testShowHintBarBringsItBackAfterDismiss() async throws {
+        let url = try plainArchive()
+        let first = makeViewModel()
+        await first.open(url: url).value
+        first.dismissHintBar()
+        XCTAssertFalse(first.isHintBarVisible, "× 之后就该收回去")
+
+        let vm = makeViewModel(reuseProgress: true)
+        await vm.open(url: url).value
+        XCTAssertFalse(vm.didAutoShowHintBar, "第二次打开不再自动出现")
+
+        vm.showHintBar()
+        XCTAssertTrue(vm.isHintBarVisible, "手动重看必须能调出来")
+        XCTAssertFalse(vm.didAutoShowHintBar,
+                       "手动调出来 ≠ 自动出现 —— 这个区分正是 UI 取证要的那个事实")
+    }
+
+    /// 手动重看之后再换书:**不重置**(见 isHintBarVisible 的说明)。
+    /// 重置的话,用户刚点出来的提示会在打开下一本时无声消失;
+    /// 而"一次性"这层语义由落盘标记负责,不需要靠在换书时压标志来实现
+    func testManuallyShownHintBarSurvivesSwitchingBooks() async throws {
+        let url = try plainArchive()
+        let vm = makeViewModel()
+        await vm.open(url: url).value
+        vm.dismissHintBar()
+        vm.showHintBar()
+
+        await vm.open(url: url).value
+        XCTAssertTrue(vm.isHintBarVisible, "换书不该把用户刚点出来的提示收走")
+        XCTAssertFalse(vm.didAutoShowHintBar, "但这一次确实不是自动出现的")
     }
 }

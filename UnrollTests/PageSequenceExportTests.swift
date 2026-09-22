@@ -54,7 +54,8 @@ final class PageSequenceExportTests: XCTestCase {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
         defaults.removePersistentDomain(forName: Self.suiteName)
         return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults),
-                               bookmarkStore: Bookmarks(defaults: defaults))
+                               bookmarkStore: Bookmarks(defaults: defaults),
+                               tips: ReaderTips(defaults: defaults))
     }
 
     /// 目标目录里的文件名(排序后;空目录 / 不存在都返回 [])

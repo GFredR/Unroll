@@ -24,6 +24,9 @@ enum DesignSystem {
         static let title: CGFloat = 24
         static let body: CGFloat = 14
         static let footnote: CGFloat = 11
+        /// 空态欢迎页的辅助信息(快捷键小抄 / 最近打开列表,2026-09-22):
+        /// 比正文小一档 —— 它们是「顺便看一眼」的信息,不能抢「打开文件…」的重心
+        static let caption: CGFloat = 12
         /// HUD 页码等场景(M3)
         static let hud: CGFloat = 13
     }

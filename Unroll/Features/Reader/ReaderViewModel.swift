@@ -206,6 +206,9 @@ final class ReaderViewModel: ObservableObject {
 
     private let progressStore: ReadingProgress
     private let bookmarkStore: Bookmarks
+    /// 一次性提示的"出现过"标记(2026-09-22)。**与上面两个同款可注入** ——
+    /// 不隔离的话,单测每开一次文档就会往宿主的真实偏好里写一笔
+    private let tips: ReaderTips
     /// 当前文档的身份键(打开成功后才有;nil = 未在阅读,不落进度/书签)
     private var documentKey: String?
     /// 恢复期间不回写进度(否则切档位的 didSet 会用页 0 覆盖掉已存的进度)
@@ -215,6 +218,36 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var bookmarkedPages: [Int] = []
     /// 页码跳转面板显隐(菜单命令置位,View 渲染 sheet —— 命令不持有 View 状态)
     @Published var isJumpSheetPresented = false
+
+    // MARK: - 首次阅读提示条(2026-09-22)
+
+    /// 提示条是否在屏幕上。**纯内存态**,与"是否已经出现过"(落盘)分开:
+    /// 一个是此刻的画面,一个是"以后还该不该自动出现" —— 混在一处会让
+    /// 「用户手动重看提示」变成「把一次性标记又抹掉一次」。
+    /// ⚠️ **换书不重置它**:用户按了「显示阅读提示」之后再打开另一本,
+    /// 不该把他的选择丢掉(其他面板标志在 open 里都会被压回 false,这个刻意不压)
+    @Published private(set) var isHintBarVisible = false
+
+    /// 本次打开是否**自动**显示过提示条(只有"这一生第一次"会是 true)。
+    ///
+    /// 为什么单独记一个字段:`isHintBarVisible` 分不出「自动出现」与「菜单调出来」,
+    /// 而**事后去读一次性标记也分不出** —— 标记与显示是同一段同步代码写的,
+    /// 打开完成之后那个标记必然是 true。UI 取证(`DemoDriver`)要的正是
+    /// 「真实 App 里这条自动路径通着」,所以这个事实必须有地方留下
+    private(set) var didAutoShowHintBar = false
+
+    /// 关掉提示条。只改屏幕状态:标记早在它出现时就写过了(见 ReaderTips)
+    func dismissHintBar() {
+        isHintBarVisible = false
+    }
+
+    /// 主动再显示一次(菜单「帮助 → 显示阅读提示」)。
+    ///
+    /// 与自动出现**共用同一个开关**:于是"重看"不需要另一条渲染路径,
+    /// 也不会顺手改掉一次性标记(重看之后再打开别的书,它不会自己冒出来)
+    func showHintBar() {
+        isHintBarVisible = true
+    }
 
     // MARK: - 完整性检查(2026-09-17)
 
@@ -602,9 +635,11 @@ final class ReaderViewModel: ObservableObject {
 
     /// 存储可注入(单测用隔离 suite)
     init(progressStore: ReadingProgress = ReadingProgress(),
-         bookmarkStore: Bookmarks = Bookmarks()) {
+         bookmarkStore: Bookmarks = Bookmarks(),
+         tips: ReaderTips = ReaderTips()) {
         self.progressStore = progressStore
         self.bookmarkStore = bookmarkStore
+        self.tips = tips
     }
 
     /// 清空全部续读进度与书签(「清空最近打开」连带调用,不留无主数据)
@@ -679,6 +714,10 @@ final class ReaderViewModel: ObservableObject {
         documentName = url.lastPathComponent
         // 失败也保留:打开失败时「在访达里显示」恰恰最有用(去看一眼这文件到底是什么)
         documentURL = url
+        // 提示条的「本次打开是否自动显示过」跟着换书归零 —— 它描述的是**这一次**打开。
+        // 屏上那一行本身**不归零**:用户按「显示阅读提示」调出来的,不该被换书收走
+        // (两件事分开的原因见 isHintBarVisible 的说明)
+        didAutoShowHintBar = false
         // 上一轮的密码提示不跨书:换一个包就该干干净净地重新问
         passwordFailure = nil
         let task = Task { await performOpen(url: url, passphrase: passphrase) }
@@ -719,6 +758,15 @@ final class ReaderViewModel: ObservableObject {
             passwordFailure = nil
             isUnlockSheetPresented = false
             phase = .reading
+
+            // 首次阅读提示条(2026-09-22):只在这一生中的第一次自动出现。
+            // 注意这两句是**同步写、中间没有 await** —— 取消只可能在挂起点生效,
+            // 所以不存在"标记写了、提示条却没显示"的中间态(写的顺序因此无所谓)
+            if !tips.hasShownHintBar {
+                isHintBarVisible = true
+                tips.markHintBarShown()
+                didAutoShowHintBar = true
+            }
 
             // 续读键:文件名 + 文件大小(stat 放后台,不占主线程,AGENTS.md 十二.1)
             let bytes = await fileSize(of: url)

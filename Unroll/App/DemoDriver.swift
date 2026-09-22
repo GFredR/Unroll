@@ -12,6 +12,7 @@
 //   demo-jump     → 页码跳转面板 + 侧边预览(⌥⌘G)取证
 //   demo-scroll   → 连续滚动(⌘0)取证(下行 + 回程,见 runScroll 的判据说明)
 //   demo-export   → 导出本卷页文件(⇧⌘E)面板取证(真导一遍,见 runExport 的判据说明)
+//   demo-hint     → 首次阅读提示条取证(见 runHint 的判据说明)
 //
 // 为什么用标记文件而不是 argv:`open --args` 在 macOS 15 上实测**传不进 App**
 // (LaunchServices 会过滤未知 argv;2026-09-20 用探针 App 复核 —— 经 `open`
@@ -19,7 +20,7 @@
 // 环境变量 UNROLL_DEMO_SCRIPT 仍作兜底(值 grid/jump 选场景,其它非空值 = 翻页)。
 //
 // 录制脚本见 Scripts/record-demo.sh;
-// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll / ONLY=export)。
+// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll / ONLY=export / ONLY=hint)。
 // 不需要演示时:直接删掉本文件 + UnrollApp.swift 里那一处 #if DEBUG 调用即可。
 //
 // 调试:每个节点写一行到容器 tmp/demo-driver.log
@@ -51,6 +52,9 @@ enum DemoDriver {
         case scroll = "demo-scroll"
         /// 导出本卷页文件(⇧⌘E)。**真导一遍**并数磁盘:见 `runExport` 的判据说明
         case export = "demo-export"
+        /// 首次阅读提示条(2026-09-22)。**它自己只出现一次**,所以这个场景
+        /// 靠 `showHintBar()` 显式调出来 —— 与菜单里那一项走的是同一个方法
+        case hint = "demo-hint"
 
         /// 认全名(`demo-grid`)与简写(`grid`)。**认不出返回 nil**,由调用方决定
         /// 兜底 —— 环境变量那条路的旧语义是「随便给个非空值就翻页」,
@@ -61,6 +65,7 @@ enum DemoDriver {
             case Scene.jump.rawValue, "jump": return .jump
             case Scene.scroll.rawValue, "scroll": return .scroll
             case Scene.export.rawValue, "export": return .export
+            case Scene.hint.rawValue, "hint": return .hint
             default: return nil
             }
         }
@@ -83,7 +88,7 @@ enum DemoDriver {
         // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
         guard !UnrollRuntime.isTesting else { return nil }
 
-        for scene in [Scene.grid, .jump, .scroll, .export, .paging]
+        for scene in [Scene.grid, .jump, .scroll, .export, .hint, .paging]
         where FileManager.default.fileExists(atPath: flagURL(for: scene).path) {
             return scene
         }
@@ -120,7 +125,8 @@ enum DemoDriver {
         let flags = Scene.allCases
             .filter { FileManager.default.fileExists(atPath: flagURL(for: $0).path) }
             .map(\.rawValue).joined(separator: ",")
-        log("onAppear scene=\(scene?.rawValue ?? "none") flags=[\(flags)] argv=[\(argv)] env=\(envHit)")
+        log("onAppear scene=\(scene?.rawValue ?? "none") flags=[\(flags)] argv=[\(argv)] env=\(envHit) "
+            + "markerAtAppear=\(ReaderTips().hasShownHintBar ? 1 : 0)")
         guard let scene, !hasStarted else { return }
         hasStarted = true
         Task { await waitForDocument(scene: scene, on: viewModel) }
@@ -154,6 +160,9 @@ enum DemoDriver {
         case .export:
             await prepareForProbe(on: vm)
             await runExport(on: vm)
+        case .hint:
+            await prepareForProbe(on: vm)
+            await runHint(on: vm)
         }
     }
 
@@ -420,6 +429,44 @@ enum DemoDriver {
         log("scene=export pages=\(pages) written=\(written) skipped=\(skipped) "
             + "failed=\(failed) stop=\(stop) covers=\(covers) onDisk=\(onDisk) "
             + "waited=\(ticks * 100)ms")
+    }
+
+    /// 场景:首次阅读提示条(2026-09-22)。
+    ///
+    /// **判据怎么分**:
+    ///   · `visible` —— 显式调 `showHintBar()` 之后它在不在屏上。**这是断言项**:
+    ///     菜单「帮助 → 显示阅读提示」走的就是这同一个方法,它为 0 说明重看入口是坏的。
+    ///   · `auto` —— 打开文档时它**是不是自己出现的**。同样是**事实,不是断言项**:
+    ///     它只自动出现一次,所以同一个容器再跑一遍必然是 0。
+    ///     把 `auto=0` 当失败会把人送去查一个没坏的功能(§11.9 那条教训的同型);
+    ///     要看 `auto=1`,得让容器回到"没见过这条提示"的状态再跑(新装 / 清过容器)。
+    ///
+    /// ⚠️ **本段明确没覆盖两处**(别把这里的绿读成"提示条全验了"):
+    ///   ① 「没盖住页面」这件观感。它在代码里由**结构**保证(提示条是布局里的一行,
+    ///      画布拿到的是扣掉它之后的高度,见 ReaderView 的 `.reading` 分支);
+    ///      截图只负责让人看一眼那一行与页面是分开的。变成机器判据需要一把
+    ///      像 page_metrics.swift 那样的尺子(量"页面顶缘是否在提示条下缘之下"),
+    ///      本批没做,也就**不声称验过**;
+    ///   ② `×` 按钮的**接线**。本驱动调的是 ViewModel 那一层,证明不了那个按钮
+    ///      真的接到了它 —— 那一下只能人点(与 §13 里"文案是否得体"同一类)。
+    private static func runHint(on vm: ReaderViewModel) async {
+        // ⚠️ 别拿 `isHintBarVisible` 当"自动出现"的依据,也别在这里读一次性标记:
+        // 两者都分不出"它自己出现的"和"刚被 showHintBar() 调出来的"。
+        // 2026-09-22 第一版就是这么错的 —— 日志里出现过 `auto=1 seenBefore=1`
+        // 这样自相矛盾的一对(标记与显示是同一段同步代码写的,事后读必为 true)
+        let auto = vm.didAutoShowHintBar ? 1 : 0
+
+        // 停在第 2 页:封面当背景太容易被误读成"这一页什么都没有"
+        vm.goTo(min(1, max(vm.pageCount - 1, 0)))
+        try? await Task.sleep(for: .milliseconds(700))
+
+        // 菜单「帮助 → 显示阅读提示」走的就是这个方法
+        vm.showHintBar()
+        try? await Task.sleep(for: .milliseconds(900))
+
+        log("scene=hint auto=\(auto) visible=\(vm.isHintBarVisible ? 1 : 0) "
+            + "markerNow=\(ReaderTips().hasShownHintBar ? 1 : 0) "
+            + "current=\(vm.pageIndex) pages=\(vm.pageCount)")
     }
 }
 #endif

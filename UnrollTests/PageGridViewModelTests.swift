@@ -36,7 +36,8 @@ final class PageGridViewModelTests: XCTestCase {
         let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
         defaults.removePersistentDomain(forName: Self.suiteName)
         return ReaderViewModel(progressStore: ReadingProgress(defaults: defaults),
-                               bookmarkStore: Bookmarks(defaults: defaults))
+                               bookmarkStore: Bookmarks(defaults: defaults),
+                               tips: ReaderTips(defaults: defaults))
     }
 
     // MARK: - 可用性

@@ -28,6 +28,13 @@ struct UnrollApp: App {
     @State private var staleRecentIDs: Set<UUID> = []
     /// 点击失效条目后的说明(非 nil → 弹一句,不再无声消失)
     @State private var missingRecentName: String?
+    /// 「帮助 → 键盘快捷键…」面板(2026-09-22)
+    @State private var isShortcutSheetPresented = false
+
+    /// 项目主页。⚠️ **仓库尚未 push**(唯一阻塞是 `gh` 未登录,见发布清单 §2)——
+    /// 首推之前点这一项会拿到 404。这是**已知且刻意**的:地址就是 `publish.sh`
+    /// 将要创建的 `GFredR/Unroll`,不写成占位符也不留 TODO(仓库零 TODO 纪律)
+    private let homepageURL = URL(string: "https://github.com/GFredR/Unroll")!
 
     /// M4:崩溃采集的会话标记要靠 AppKit 生命周期回调闭合
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
@@ -35,8 +42,18 @@ struct UnrollApp: App {
     var body: some Scene {
         // 标题直接用 Localizable key,SwiftUI 会自动按系统语言解析(en / zh-Hans)
         WindowGroup("app.name") {
-            ReaderView(viewModel: reader)
+            ReaderView(viewModel: reader,
+                       recentItems: emptyStateRecents,
+                       onOpenRecent: { openRecent($0) },
+                       // 提示条里的「全部快捷键…」与菜单里那一项开的是同一个面板:
+                       // 一个状态、一处渲染,不给它第二条渲染路径
+                       onShowShortcuts: { isShortcutSheetPresented = true })
                 .frame(minWidth: 720, minHeight: 480)
+                // 帮助 → 键盘快捷键…(2026-09-22)。挂在根视图上:它是 App 级面板,
+                // 与阅读态 / 空态无关 —— 任何阶段都该能翻快捷键
+                .sheet(isPresented: $isShortcutSheetPresented) {
+                    ShortcutSheet()
+                }
                 // 窗口大小/位置记忆:AppKit setFrameAutosaveName 自动持久化并恢复
                 // (2026-09-16 顺带接管窗口标题:带文件名与页码,见 WindowChrome)
                 .background(WindowChrome(title: reader.windowTitle))
@@ -263,6 +280,32 @@ struct UnrollApp: App {
                     }
                 }
             }
+
+            // 帮助(2026-09-22)。原先这里**什么都没有** —— 而「不知道就翻菜单栏 Help」
+            // 正是 macOS 用户的肌肉记忆,菜单栏那条一直是空的。
+            // 用 .help 位置(replacing)而不是另起一个菜单:用户找它时目光落在菜单栏
+            // 最右端,不该让他去别处寻。
+            // ⌘? 取系统惯例(⇧/ 打出 ?),与「帮助」这个键位本身的语义一致
+            CommandGroup(replacing: .help) {
+                Button(L10n.tr("help.menu.shortcuts")) {
+                    isShortcutSheetPresented = true
+                }
+                .keyboardShortcut("?", modifiers: .command)
+
+                // 首次阅读提示条的**重看入口**(2026-09-22)。那一条只自动出现
+                // 一次(见 Core/ReaderTips.swift),之后就靠这里 ——
+                // 灰掉而不是留一个点了没反应的开关:提示条是贴在画布上方的一行,
+                // 没有文档时它无处可贴;而空态本来就把小抄摆在那儿了
+                // (同款判断见「封面单独一页」在滚动模式下灰掉的说明)
+                Button(L10n.tr("help.menu.showTips")) {
+                    reader.showHintBar()
+                }
+                .disabled(reader.phase != .reading)
+
+                Button(L10n.tr("help.menu.homepage")) {
+                    NSWorkspace.shared.open(homepageURL)
+                }
+            }
         }
     }
 
@@ -321,22 +364,20 @@ struct UnrollApp: App {
         }
     }
 
-    /// 最近打开的菜单项标题:有续读记录则带上进度(缺总页数的老记录只显示页码);
-    /// 探测出文件已不在的条目补一句「找不到文件」,点之前就能看出来
+    /// 最近打开的菜单项标题。口径已抽到 `RecentPresentation`(空态欢迎页共用同一份 ——
+    /// 两处各写一份的话,迟早出现「菜单标了 P.12/48、空态没标」这种分叉),
+    /// 这里只做转发
     private func recentLabel(for entry: RecentDocuments.Entry) -> String {
-        let base: String
-        if let saved = progressIndex.entry(forDocument: entry.displayName) {
-            if let total = saved.total, total > 0 {
-                base = L10n.tr("app.menu.recentProgress", entry.displayName, saved.page + 1, total)
-            } else {
-                base = L10n.tr("app.menu.recentProgressUnknownTotal", entry.displayName, saved.page + 1)
-            }
-        } else {
-            base = entry.displayName
-        }
-        return staleRecentIDs.contains(entry.id)
-            ? base + L10n.tr("app.menu.recentMissingSuffix")
-            : base
+        RecentPresentation.title(for: entry, progress: progressIndex, staleIDs: staleRecentIDs)
+    }
+
+    /// 空态欢迎页的最近列表:与菜单**同源同口径**,只取前几条
+    /// (上限理由见 `RecentPresentation.visibleLimit`)
+    private var emptyStateRecents: [RecentItem] {
+        Array(RecentPresentation.items(from: recentList,
+                                       progress: progressIndex,
+                                       staleIDs: staleRecentIDs)
+            .prefix(RecentPresentation.visibleLimit))
     }
 }
 

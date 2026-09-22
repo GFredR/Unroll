@@ -22,11 +22,24 @@ struct ReaderView: View {
 
     @ObservedObject var viewModel: ReaderViewModel
 
+    /// 空态欢迎页要显示的「最近打开」。默认空数组 —— 没有历史时空态只留
+    /// 拖放区与快捷键小抄。数据由 App 层喂(与菜单「打开最近」同源同口径,
+    /// 见 Core/RecentPresentation.swift)
+    var recentItems: [RecentItem] = []
+    /// 点最近条目。回调注入而不是让视图自己去碰 RecentDocuments ——
+    /// 书签解析(沙盒重授权)与失效剔除都属 App 层,视图只回答"点了哪一条"
+    var onOpenRecent: (RecentDocuments.Entry) -> Void = { _ in }
+    /// 点首次阅读提示条里的「全部快捷键…」→ 交给 App 层打开帮助面板。
+    /// 面板状态归 App(没有文档也开着它),所以这里只回答"用户点了"
+    var onShowShortcuts: () -> Void = {}
+
     var body: some View {
         Group {
             switch viewModel.phase {
             case .noDocument:
-                EmptyStateView(onOpen: { viewModel.open(url: $0) })
+                EmptyStateView(onOpen: { viewModel.open(url: $0) },
+                               recentItems: recentItems,
+                               onOpenRecent: onOpenRecent)
             case .opening:
                 OpeningView()
             case .needsPassword:
@@ -42,7 +55,15 @@ struct ReaderView: View {
             case .failed(let failure):
                 FailureView(failure: failure, onOpen: { viewModel.open(url: $0) })
             case .reading:
-                ReaderCanvas(viewModel: viewModel)
+                // 首次阅读提示条(2026-09-22)是**布局里的一行**,不是浮层 ——
+                // 画布于是拿到扣掉这条之后的高度,页面一条边都不会被压住
+                VStack(spacing: 0) {
+                    if viewModel.isHintBarVisible {
+                        ReaderHintBar(onShowAll: onShowShortcuts,
+                                      onDismiss: { viewModel.dismissHintBar() })
+                    }
+                    ReaderCanvas(viewModel: viewModel)
+                }
             }
         }
         // 顺序铁律:先 .frame 撑满窗口再 .background —— 反过来背景只裹住内容
@@ -101,9 +122,19 @@ private struct EmptyStateView: View {
 
     /// 「打开文件…」回调(ReaderView 注入 viewModel.open,url 归 VM 管,与 FailureView 同款)
     let onOpen: (URL) -> Void
+    /// 最近打开(与菜单「打开最近」同源同口径,见 Core/RecentPresentation.swift)
+    var recentItems: [RecentItem] = []
+    /// 点最近条目 → 交给 App 层做书签重授权与失效剔除
+    var onOpenRecent: (RecentDocuments.Entry) -> Void = { _ in }
+
+    /// 当前悬停的最近条目。macOS 上 plain button 没有默认 hover 反馈,
+    /// 而这一列小字很容易被读成静态文本 —— 需要一点「这行能点」的回应
+    @State private var hoveredRecentID: UUID?
 
     var body: some View {
-        VStack(spacing: DesignSystem.Spacing.lg) {
+        // 2026-09-22:间距由 lg(32) 收到 md(16) —— 空态多了小抄与最近打开两段,
+        // 纵向总高必须收在窗口最小高度 480 以内(算法见 RecentPresentation.visibleLimit)
+        VStack(spacing: DesignSystem.Spacing.md) {
             appIcon
                 .shadow(color: .black.opacity(0.55), radius: 14, x: 0, y: 6)
 
@@ -123,14 +154,24 @@ private struct EmptyStateView: View {
                 .controlSize(.large)
                 .tint(DesignSystem.Palette.brand)
                 .keyboardShortcut("o", modifiers: .command)
+
+            shortcuts
+
+            if !recentItems.isEmpty {
+                recents
+            }
         }
         // 虚线框:明示整块区域都能拖文件进来(拖放挂在 ReaderView 根部,全阶段可用)
-        .padding(DesignSystem.Spacing.xl + DesignSystem.Spacing.md)
+        // 2026-09-22:外边距由 xl + md(80) 收到 lg + md(48),给上面两段让出高度
+        .padding(DesignSystem.Spacing.lg + DesignSystem.Spacing.md)
         .overlay(
             RoundedRectangle(cornerRadius: DesignSystem.Radius.dropZone)
                 .strokeBorder(style: StrokeStyle(lineWidth: 1.5, dash: [7, 7]))
                 .foregroundStyle(Color.white.opacity(0.14))
-                .padding(DesignSystem.Spacing.lg)
+                // 2026-09-22:框距窗口边的余白 = 外层外边距 − 这里的内缩。
+                // 外层从 80 收到 48 后,若这里不动就会变成 16(明显贴边);
+                // 同步收到 md(16),余白 = 48 − 16 = 32,与改动前的 80 − 32 = 48 同一量级
+                .padding(DesignSystem.Spacing.md)
         )
     }
 
@@ -138,6 +179,67 @@ private struct EmptyStateView: View {
         if let url = ArchivePicker.pick() {
             onOpen(url)
         }
+    }
+
+    /// 常用快捷键小抄(2026-09-22)。
+    ///
+    /// **为什么放在空态**:菜单栏里有 23 条带快捷键的命令,不翻菜单就完全看不见;
+    /// 而空态是用户唯一「主动停在这里、手上没事」的时刻 —— 此刻给信息不打断任何人。
+    /// 只列最有**发现价值**的几条(⌘0 连续滚动、⇧⌘G 网格、⌥⌘G 跳页这类:
+    /// 不看到就想不起它存在);翻页/缩放那种「按两下就摸到」的刻意不占位置。
+    /// 压成一行 —— 空态是欢迎页,不是快捷键清单(完整清单在「帮助 → 键盘快捷键」)
+    private var shortcuts: some View {
+        VStack(spacing: DesignSystem.Spacing.xs) {
+            Text(L10n.tr("reader.empty.shortcuts.title"))
+                .font(.system(size: DesignSystem.Typography.footnote, weight: .semibold))
+                .foregroundStyle(.tertiary)
+
+            Text(L10n.tr("reader.empty.shortcuts.list"))
+        }
+        .font(.system(size: DesignSystem.Typography.caption))
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 最近打开(2026-09-22)。这份数据本来就存着(菜单「打开最近」一直在用),
+    /// 空态原先却只给一个空白拖放框 —— 明明有历史,打开 App 还得重新找一遍文件
+    private var recents: some View {
+        VStack(spacing: DesignSystem.Spacing.xs) {
+            Text(L10n.tr("reader.empty.recents.title"))
+                .font(.system(size: DesignSystem.Typography.footnote, weight: .semibold))
+                .foregroundStyle(.tertiary)
+
+            ForEach(recentItems) { item in
+                Button {
+                    onOpenRecent(item.entry)
+                } label: {
+                    Text(item.title)
+                        .font(.system(size: DesignSystem.Typography.caption))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(recentStyle(item))
+                }
+                .buttonStyle(.plain)
+                .onHover { inside in
+                    if inside {
+                        hoveredRecentID = item.id
+                    } else if hoveredRecentID == item.id {
+                        hoveredRecentID = nil
+                    }
+                }
+                .help(item.title)
+            }
+        }
+    }
+
+    /// 失效条目压暗 —— 与菜单那句「找不到文件」后缀同一套语义(点之前就能看出来);
+    /// 悬停时换品牌色,回应「这行能点」
+    private func recentStyle(_ item: RecentItem) -> AnyShapeStyle {
+        if hoveredRecentID == item.id {
+            return AnyShapeStyle(DesignSystem.Palette.brand)
+        }
+        return item.isMissing ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary)
     }
 
     /// 直接用 AppIcon(Dock / Finder 同一张脸,品牌一致);SF Symbol 仅作兜底

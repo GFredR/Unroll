@@ -6,7 +6,7 @@
 #   ./Scripts/verify-ui.sh                 # 拍全套截图到 docs/
 #   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
 #   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
-#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg|grid|jump|scroll|export)
+#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg|grid|jump|scroll|export|hint)
 #
 # 为什么要有这个脚本:
 #   交付前有几处只能靠"看"来判定的东西 —— 空态长什么样、加密归档的密码框长什么样、
@@ -44,8 +44,8 @@ if [ "$#" -gt 0 ]; then
     echo "✗ 不接受位置参数:$*" >&2
     echo "  这几个是环境变量,要写在命令**前面**:" >&2
     echo "    ONLY=<段名> APP=<.app> OUT_DIR=<目录> $0" >&2
-    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll | export" >&2
-    echo "  (grid / jump / scroll / export 需要可驱动的 Debug 版,见文末说明)" >&2
+    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll | export | hint" >&2
+    echo "  (grid / jump / scroll / export / hint 需要可驱动的 Debug 版,见文末说明)" >&2
     exit 2
 fi
 
@@ -151,7 +151,7 @@ cleanup_probe_flags() {
     #      **DemoDriver.Scene 加一个 case → 本行就必须加一个文件名**
     #    两处不联动就是「跑完没清干净」的复发点,而它没有任何报错。
     rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" \
-          "$dir/demo-scroll" "$dir/demo-export" 2>/dev/null || true
+          "$dir/demo-scroll" "$dir/demo-export" "$dir/demo-hint" 2>/dev/null || true
 }
 
 # ------------------------------------------------------------------ 空态 --
@@ -424,8 +424,17 @@ fi
 # 再数一次,与报告的 `written` 三方对齐。理由与网格那条 `thumbs` 完全一样:
 # 报告说写了 N 页**不等于**磁盘上真有 N 个文件,而「报告对、磁盘空」恰恰是
 # 判据最容易放过的那类假绿。样本沿用网格那份 30 页(观感真实、进度有内容)。
-if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] || [ "$ONLY" = "export" ]; then
-    head2 "面板取证:网格 / 跳转预览 / 连续滚动 / 导出(ONLY=$ONLY)"
+#
+# ONLY=hint(首次阅读提示条,2026-09-22)同样走标记文件,但它与前面几段有一处
+# **根本不同**:取的不是面板、也不是滚动布局,而是「阅读时贴在画布上方的那一行」,
+# 所以截图要的是**主窗口**(与 scroll 同款判据:有标题的那个窗口)。
+# 提示条自己只自动出现一次,故驱动用 `showHintBar()` 显式调出来(菜单里那一项
+# 走的是同一个方法);于是 `auto=0` 在重复跑时属于**预期**,不能当失败 ——
+# 判据只看 `visible=1`。另:这一段**不验**「没盖住页面」,那由代码结构保证
+# (它是布局里的一行,不是浮层),截图只供人看;详见 DemoDriver.runHint 的说明。
+if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
+   || [ "$ONLY" = "export" ] || [ "$ONLY" = "hint" ]; then
+    head2 "面板取证:网格 / 跳转预览 / 连续滚动 / 导出 / 阅读提示(ONLY=$ONLY)"
 
     PROBE_TMP="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
     DRIVER_LOG="$PROBE_TMP/demo-driver.log"
@@ -466,6 +475,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] || [ "
     jump)   SCENE="jump";   SHOT="shot-jump-preview.png";   WAIT_PAT="scene=jump current=" ;;
     scroll) SCENE="scroll"; SHOT="shot-continuous-scroll.png"; WAIT_PAT="scene=scroll layout=" ;;
     export) SCENE="export"; SHOT="shot-export-panel.png";   WAIT_PAT="scene=export pages=" ;;
+    hint)   SCENE="hint";   SHOT="shot-reading-tips.png";   WAIT_PAT="scene=hint " ;;
     esac
 
     quit_app
@@ -576,7 +586,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] || [ "
         else
             bad "行视图没有为新位置取图:$S_BEFORE → ${S_AFTER:-nil}(视口可能没动)"
         fi
-    else
+    elif [ "$ONLY" = "export" ]; then
         # ---- 导出本卷页文件:判据的重心是「报告 ↔ 磁盘」的对照 ----------------
         E_PAGES="$(field pages)"; E_WRITTEN="$(field written)"; E_SKIP="$(field skipped)"
         E_FAIL="$(field failed)"; E_STOP="$(field stop)"; E_COVERS="$(field covers)"
@@ -625,16 +635,39 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] || [ "
         else
             info "导出目录不存在 —— 跳过脚本侧复数:$EXPORT_DIR"
         fi
+    elif [ "$ONLY" = "hint" ]; then
+        # ---- 首次阅读提示条(2026-09-22)------------------------------------
+        H_AUTO="$(field auto)"; H_VIS="$(field visible)"
+
+        # 唯一的断言项。菜单「帮助 → 显示阅读提示」走的就是驱动调的那个方法,
+        # 它为 0 = 重看入口坏了(而这是提示条"只自动出现一次"之后的唯一出路)
+        [ "${H_VIS:-0}" = "1" ] && ok "提示条已在屏上(visible=1)" \
+            || bad "showHintBar() 之后提示条不在屏上:visible=${H_VIS:-nil}"
+
+        # 下面这条**只提示、不判红**:提示条只自动出现一次,同一容器再跑必然是 0 ——
+        # 把它当失败会把人送去查一个没坏的功能。想看 auto=1,得先让容器回到
+        # "没见过这条提示"的状态(新装 / 清过容器),再跑一次这一段
+        if [ "${H_AUTO:-0}" = "1" ]; then
+            ok "打开文档时它自己出现了 —— 真实 App 里这条自动路径通着(auto=1)"
+        else
+            info "这次没自动出现(auto=0)—— 预期之内:它只自动出现一次"
+        fi
+    else
+        # 走到这里说明 case 里加了场景、断言分支却没跟上。
+        # **必须当场判红**:少一个分支的表现是"脚本全绿、断言一条没跑",
+        # 而那正是 §18.5 记下的"新场景静默走进旧场景判据"的同型事故
+        bad "场景 $ONLY 没有断言分支 —— verify-ui.sh 的 case 与这里的 elif 链没联动"
     fi
 
     # ---- 截图 ----
     # sheet 是独立窗口,且**没有标题** —— 主窗口的标题是「文件名 · P.n/m」。
     # 这两点合起来是「哪个窗口是面板」的可靠判据(比按尺寸挑稳:主窗口
     # 900x508、网格面板 720x520,高度几乎一样,按尺寸会选错)。
-    # 滚动模式没有面板,拍的就是**主窗口** —— 正是上面那条判据的反面
+    # 滚动模式没有面板,拍的就是**主窗口** —— 正是上面那条判据的反面;
+    # 阅读提示条也一样(它贴在主窗口的画布上方,不是独立面板)
     ID=""
     for i in $(seq 1 20); do
-        if [ "$ONLY" = "scroll" ]; then
+        if [ "$ONLY" = "scroll" ] || [ "$ONLY" = "hint" ]; then
             ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3!="" {print $1; exit}')"
         else
             ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3=="" {print $1; exit}')"
@@ -729,5 +762,7 @@ echo "    · 空态的三个元素(AppIcon / 说明 / 打开按钮)是否协调"
 echo "    · dmg 里两个图标的位置关系是否符合直觉(左 App 右 Applications)"
 echo "    · HUD 的进度条拖起来跟不跟手(拖动中页码跟着变,松手才跳页)"
 echo "    · 连续滚动连滑的跟手程度与掉帧(版式与「有没有被裁」已由上面的版式测量量过)"
+echo "    · 首次阅读提示条那一行:文案是否说清了那三个手势、有没有盖住页面、"
+echo "      「×」点一下是否真的收回去(驱动调的是 ViewModel 那一层,证明不了按钮接线)"
 echo "    · 「文件 → 另存当前页…」存出来的图与屏幕上看到的一致(双页应是一整摊)"
 echo "    · 静止 2.5s 后光标是否一起隐藏、动一下就回来"
