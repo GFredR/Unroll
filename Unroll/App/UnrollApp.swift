@@ -87,6 +87,16 @@ struct UnrollApp: App {
                 .keyboardShortcut("s", modifiers: .command)
                 .disabled(reader.phase != .reading)
 
+                // 批量导出(⇧⌘E,2026-09-21)。与上一项的分工要紧,别合并:
+                // ⌘S 导出**屏幕上那一摊**(双页合成一张、JPEG 重编码,要的是所见即所得);
+                // 这一项导出**归档里的每一页**(原始字节直通、按阅读顺序补零命名,
+                // 要的是原素材)。⇧⌘E 取「Export」的联想键,与 ⌘S 同组相邻
+                Button(L10n.tr("app.menu.exportPages")) {
+                    exportPages()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(!reader.canExportPages)
+
                 Button(L10n.tr("app.menu.revealInFinder")) {
                     if let url = reader.documentURL {
                         NSWorkspace.shared.activateFileViewerSelecting([url])
@@ -264,6 +274,16 @@ struct UnrollApp: App {
         guard let image = reader.exportImage() else { return }
         PageSavePanel.save(image: image,
                            suggestedName: reader.exportFileName(format: .png))
+    }
+
+    // MARK: - 导出本卷页文件(⇧⌘E,2026-09-21)
+
+    /// 先选目录(取消即静默返回),再交给 VM 起后台任务。
+    /// 顺序不能反过来:面板是**唯一**能拿到写权限的地方(沙盒),
+    /// 先起任务再要目录的话,前几页会因为没权限而失败
+    private func exportPages() {
+        guard let directory = PageExportPanel.chooseDirectory() else { return }
+        reader.exportPages(to: directory)
     }
 
     // MARK: - 打开链路(唯一入口:面板 / 拖拽 / 双击 / 最近打开 全走这里)

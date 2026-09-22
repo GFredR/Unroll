@@ -207,3 +207,23 @@
 /* 漏页的两种情况(都不是损坏,但都不能不说) */
 "reader.grid.skippedEncrypted" = "另有 %ld 页因为加密没有缩略图。输入解压密码后重新生成即可补上。";
 "reader.grid.failed" = "有 %ld 页读不出来，没有缩略图。";
+
+/* 批量导出本卷页文件（⇧⌘E，2026-09-21）。
+   与「另存当前页」的分工要紧：⌘S 导的是屏幕上那一摊（双页合成一张、JPEG 重编码），
+   这一组导的是归档里的每一页（原始字节直通、按阅读顺序补零命名）。 */
+"app.menu.exportPages" = "导出本卷页文件…";
+"app.export.chooseMessage" = "选择把这些页导出到哪个文件夹。将按阅读顺序命名，不改动原压缩包。";
+"app.export.choosePrompt" = "导出";
+
+"reader.export.title" = "导出页文件（共 %ld 页）";
+"reader.export.running" = "正在导出 %ld / %ld";
+"reader.export.written" = "已导出 %ld 页";
+"reader.export.hint" = "已按阅读顺序命名，在访达里按名称排序就是阅读顺序。";
+"reader.export.cancelled" = "已停止。";
+"reader.export.writeFailed" = "写入失败，已停止 —— 请检查磁盘剩余空间与该文件夹的写入权限。";
+"reader.export.stalled" = "这个压缩包坏得比较严重，导出提前停在了中途。";
+"reader.export.skippedEncrypted" = "另有 %ld 页因为加密没有导出。输入解压密码后再导出即可带上它们。";
+"reader.export.failed" = "有 %ld 页读不出来（第 %@ 页）。";
+"reader.export.remaining" = "还有 %ld 页没有处理。";
+"reader.export.stop" = "停止";
+"reader.export.done" = "完成";

@@ -208,3 +208,24 @@
 /* The two ways a page can be missing a thumbnail (neither is damage, both must be said) */
 "reader.grid.skippedEncrypted" = "%ld encrypted pages have no thumbnail. Unlock with a password and regenerate to fill them in.";
 "reader.grid.failed" = "%ld pages could not be read and have no thumbnail.";
+
+/* Export the whole volume as page files (⇧⌘E, 2026-09-21).
+   The split from "Save Current Page" matters: ⌘S exports the on-screen spread
+   (composited into one image, JPEG re-encoded); this group exports every page
+   in the archive (original bytes, named in reading order). */
+"app.menu.exportPages" = "Export All Pages…";
+"app.export.chooseMessage" = "Choose a folder to export the pages into. Pages are named in reading order; the archive itself is not modified.";
+"app.export.choosePrompt" = "Export";
+
+"reader.export.title" = "Export Pages (%ld pages)";
+"reader.export.running" = "Exporting %ld / %ld";
+"reader.export.written" = "%ld pages exported";
+"reader.export.hint" = "Named in reading order — sorting by name in Finder gives you that order.";
+"reader.export.cancelled" = "Stopped.";
+"reader.export.writeFailed" = "Couldn't write, so exporting stopped — check free disk space and write permission for that folder.";
+"reader.export.stalled" = "This archive is badly damaged; exporting stopped partway through.";
+"reader.export.skippedEncrypted" = "%ld encrypted pages were not exported. Unlock with a password and export again to include them.";
+"reader.export.failed" = "%ld pages could not be read (pages %@).";
+"reader.export.remaining" = "%ld pages were not processed.";
+"reader.export.stop" = "Stop";
+"reader.export.done" = "Done";

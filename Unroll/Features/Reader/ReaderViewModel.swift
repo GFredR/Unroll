@@ -489,6 +489,117 @@ final class ReaderViewModel: ObservableObject {
         gridThumbs.image(at: index)
     }
 
+    // MARK: - 导出本卷页文件(⇧⌘E,2026-09-21)
+
+    /// 导出状态。形状与 `grid` 同源(building/终态报告),同样是「用户主动触发的重活 + 过程可见」
+    @Published private(set) var exportState: ExportState?
+
+    /// 导出面板的显隐。与 `exportState` 分开的理由同前两个面板:
+    /// 面板开合是**视图状态**,导出结论要被测试直接断言
+    @Published var isExportSheetPresented = false
+
+    enum ExportState: Equatable {
+        case running(done: Int, total: Int)
+        /// 结束(结果见 `PageSequenceReport`,来自 ArchiveKit)。**取消也算结束** ——
+        /// 报告里带 `.cancelled`,界面据此说「已停止 · 已导出 N 页」,
+        /// 比「没有结果」有用得多
+        case ready(PageSequenceReport)
+    }
+
+    private var exportTask: Task<Void, Never>?
+
+    /// 「这一轮导出」的代号。理由与 `gridGeneration` 完全一致:取消是**协作式**的,
+    /// `cancel()` 之后后台那个同步循环还要跑到下一个检查点才发现;
+    /// 在它发现之前用户可能已经换了书 —— 那一刻收尾照常执行,
+    /// 会把**旧包的结论**贴到新书上
+    private var exportGeneration = 0
+
+    /// 菜单可用性:只有正在阅读一份真实文档时才谈得上导出它的页
+    var canExportPages: Bool {
+        phase == .reading && document != nil && pageCount > 0
+    }
+
+    /// 是否正在导出(面板据此把「停止」按钮画出来)
+    var isExportRunning: Bool {
+        if case .running = exportState { return true }
+        return false
+    }
+
+    /// 导出全卷页文件到指定目录(目录由 `PageExportPanel` 授予写权限)。
+    ///
+    /// 返回本次导出任务(UI 忽略返回值;测试可 await 等待状态机落定)
+    @discardableResult
+    func exportPages(to directory: URL) -> Task<Void, Never>? {
+        guard canExportPages, let document else { return nil }
+        exportTask?.cancel()
+
+        let total = document.entries.count
+        let name = documentName
+        exportGeneration += 1
+        let generation = exportGeneration
+        exportState = .running(done: 0, total: total)
+        isExportSheetPresented = true
+        Breadcrumbs.shared.record(.pageExportStarted(pages: total))
+
+        // ⚠️ 闭包结构照抄 `buildGrid`(那里写错过一次,注释也留在那):
+        // 外层 `Task.detached` 先 `[weak self]` + 一次 `guard let vm = self`,
+        // 之后内外两层回调都只用这个**局部强引用 vm**。不要在里层再写
+        // `[weak self]` —— 那会去捕获外层已被弱化的 self,编译期直接报错
+        let task = Task.detached(priority: .utility) { [weak self] in
+            guard let vm = self else { return }
+
+            let report = PageSequenceExporter.run(
+                document: document,
+                documentName: name,
+                directory: directory,
+                // `Task.isCancelled` 在这里读到的是**本 detached 任务**的取消状态
+                // (闭包在它的线程上被同步调用)—— 于是 VM 的 cancel 能穿进导出循环
+                isCancelled: { Task.isCancelled },
+                onProgress: { done in
+                    // 进度要回主线程(它是 @Published 状态),但循环里已按
+                    // `progressStride` 节流过了 —— 逐页回跳是「几百个任务」的来源
+                    Task { @MainActor in
+                        guard vm.exportGeneration == generation,
+                              case .running = vm.exportState else { return }
+                        vm.exportState = .running(done: done, total: total)
+                    }
+                })
+
+            await MainActor.run {
+                // 代号守卫:取消是协作式的,cancel() 之后后台循环可能还要跑一会儿。
+                // 若这期间用户换了书,这份报告已经**不属于**当前文档了
+                guard vm.exportGeneration == generation else { return }
+                // 面板可能已经被关掉了(关面板会 cancel 本轮)——
+                // 那就只留着不往 `exportState` 写一个没人看的终态
+                if vm.isExportSheetPresented {
+                    vm.exportState = .ready(report)
+                }
+                vm.exportTask = nil
+                Breadcrumbs.shared.record(.pageExportFinished(written: report.delivered,
+                                                              stop: report.stop.token))
+            }
+        }
+        exportTask = task
+        return task
+    }
+
+    /// 中断导出(**已写出的文件留在磁盘上** —— 报告会带 `.cancelled`,
+    /// 界面说的是「已停止 · 已导出 N 页」,不是「白干了」)。
+    ///
+    /// 刻意**不做回滚**:删掉用户看得见的文件比留着更糟 —— 他可能正要把那几张拿走,
+    /// 而回滚一旦删错(比如目录里本来就有同名文件)是不可逆的
+    func cancelExport() {
+        exportTask?.cancel()
+    }
+
+    /// 关掉导出面板。导出中关面板会**停掉导出**(不可见的重活不该继续烧 CPU 与磁盘,
+    /// 与 `dismissGrid` 同款判断),已写出的文件保留
+    func dismissExport() {
+        exportTask?.cancel()
+        isExportSheetPresented = false
+        exportState = nil
+    }
+
     /// 存储可注入(单测用隔离 suite)
     init(progressStore: ReadingProgress = ReadingProgress(),
          bookmarkStore: Bookmarks = Bookmarks()) {
@@ -535,6 +646,15 @@ final class ReaderViewModel: ObservableObject {
         gridThumbs = ThumbnailStore()   // 换池子(对象身份即代次隔离,见 gridThumbs 说明)
         grid = nil
         isGridSheetPresented = false
+        // 导出同理:进行中的导出读的是**旧文档**,而它的文件名前缀也来自旧书
+        // (沿用旧的名字就会把新书的页写成一堆旧书名的文件)。只 cancel 不够 ——
+        // 协作式取消要等一个检查点,代号 +1 才能让已经跑完、正排队等回主线程的
+        // 那次收尾**认出自己已作废**
+        exportTask?.cancel()
+        exportTask = nil
+        exportGeneration += 1
+        exportState = nil
+        isExportSheetPresented = false
         // 跳页预览同理:上一本书的预览图留在面板里是最容易发生的"张冠李戴"
         clearJumpPreview()
         let oldStore = store
@@ -780,6 +900,14 @@ final class ReaderViewModel: ObservableObject {
             gridThumbs = ThumbnailStore()
             grid = nil
             isGridSheetPresented = false
+            // 导出同理:解锁前的导出里,加密页是被**跳过**的(报告里那些是
+            // 「没给密码」而不是读不出来)。留着那份结论,用户会以为那几页本来
+            // 就导不出来 —— 其实再导一次就有了。换的是 document,报告一起作废
+            exportTask?.cancel()
+            exportTask = nil
+            exportGeneration += 1
+            exportState = nil
+            isExportSheetPresented = false
             clearJumpPreview()
             Breadcrumbs.shared.record(.passphraseAttempt(success: true))
             await oldStore?.teardown()

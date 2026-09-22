@@ -117,6 +117,19 @@ final class MenuStructureTests: XCTestCase {
         XCTAssertEqual(item.keyEquivalentModifierMask, .command)
     }
 
+    /// 导出本卷页文件(⇧⌘E,2026-09-21)。取「Export」的联想键:
+    /// ⇧⌘S 不行(它已被系统「存储为…」占着),而 ⇧⌘E 与 ⌘S(另存当前页)
+    /// 在字母上就分得清 —— 一个存眼前这一摊,一个导出整卷。
+    /// 它只在阅读态可用(disabled),但 keyEquivalent 与 disabled 无关 ——
+    /// 断言的正是「这一项被正确注册进了菜单」
+    func testFileMenuCarriesExportPagesWithShiftCommandE() throws {
+        _ = try requireMenu()
+        let title = L10n.tr("app.menu.exportPages")
+        let item = try XCTUnwrap(menuItem(titled: title), "菜单里找不到「\(title)」")
+        XCTAssertEqual(item.keyEquivalent, "e")
+        XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
+    }
+
     // MARK: - 既有命令不许在重构里掉队
 
     /// M3 验收标准「纯键盘可完成全部操作」的可执行版本:逐个点名常用命令
@@ -131,7 +144,8 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.thumbnailGrid",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.addBookmark", "app.menu.previousBookmark", "app.menu.nextBookmark",
-            "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
+            "app.menu.saveCurrentPage", "app.menu.exportPages", "app.menu.revealInFinder",
+            "app.menu.unlock",
             "app.menu.checkIntegrity",
         ]
         for key in expected {
@@ -151,7 +165,8 @@ final class MenuStructureTests: XCTestCase {
             "app.menu.thumbnailGrid",
             "reader.fit.window", "reader.fit.width", "reader.fit.height", "reader.fit.actual",
             "app.menu.nextBookmark", "app.menu.previousBookmark",
-            "app.menu.saveCurrentPage", "app.menu.revealInFinder", "app.menu.unlock",
+            "app.menu.saveCurrentPage", "app.menu.exportPages", "app.menu.revealInFinder",
+            "app.menu.unlock",
             "app.menu.checkIntegrity",
         ]
         for key in keys {

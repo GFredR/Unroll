@@ -71,6 +71,13 @@ enum BreadcrumbEvent: Equatable, Sendable {
     /// 缩略图网格生成结束:成功张数 + 停止原因(full / budget / cancelled / stalled)。
     /// **不记页号也不记文件名** —— 诊断只需要知道「建到哪、为什么停」
     case gridBuildFinished(generated: Int, stop: String)
+    /// 批量导出开始(2026-09-21)。只记总页数 —— 与网格 / 完整性检查一样是
+    /// 「用户主动触发的重活」,崩在它里面时这是唯一能说明「当时在干什么」的线索
+    case pageExportStarted(pages: Int)
+    /// 批量导出结束:写出页数 + 停止原因(full / cancelled / writeFailed / stalled)。
+    /// **不记页号、不记文件名、不记目标目录** —— 导出目录是用户目录,
+    /// 属于「不进存储」的那一类(§5.10.4)
+    case pageExportFinished(written: Int, stop: String)
 
     var name: String {
         switch self {
@@ -96,6 +103,8 @@ enum BreadcrumbEvent: Equatable, Sendable {
         case .integrityCheckFinished: return "integrityCheckFinished"
         case .gridBuildStarted: return "gridBuildStarted"
         case .gridBuildFinished: return "gridBuildFinished"
+        case .pageExportStarted: return "pageExportStarted"
+        case .pageExportFinished: return "pageExportFinished"
         }
     }
 
@@ -147,6 +156,14 @@ enum BreadcrumbEvent: Equatable, Sendable {
             // stop 是 PageGridStop.token 出来的固定枚举标签(full/budget/cancelled/stalled),
             // 不是用户输入 —— 与 layoutChanged 同一性质
             return "\(generated):\(stop)"
+        case .pageExportStarted(let pages):
+            return String(pages)
+        case .pageExportFinished(let written, let stop):
+            // stop 是 `PageSequenceStop.token` 出来的固定枚举标签
+            // (full/cancelled/sinkStopped/stalled),不是用户输入 —— 同上。
+            // 刻意用 `sinkStopped` 这个结构名而不是界面文案「写入失败」:
+            // 面包屑要能跨版本比对,文案随时会改
+            return "\(written):\(stop)"
         }
     }
 }

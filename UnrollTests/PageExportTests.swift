@@ -188,4 +188,98 @@ final class PageExportTests: XCTestCase {
                                                     pageCount: 4, format: .png),
                        "page-p001.png")
     }
+
+    /// 批量导出走的是**同一个**命名实现 —— 只换扩展名,补零规则不许有两份
+    /// (两条链各写一遍的话,「总页数从 999 变 1000 时补零跳档」只会在一侧被修)。
+    /// 所以这里两条各写一遍**字面量**,而不是拿一个去改另一个 ——
+    /// 互相推导的断言在两边一起写错时照样绿
+    func testBulkNamingReusesTheSamePaddedRuleAsSave() {
+        XCTAssertEqual(PageExport.suggestedFileName(documentName: "My Comic.cbz", page: 2,
+                                                    pageCount: 4, format: .png),
+                       "My Comic-p003.png")
+        XCTAssertEqual(PageExport.suggestedFileName(documentName: "My Comic.cbz", page: 2,
+                                                    pageCount: 4, fileExtension: "webp"),
+                       "My Comic-p003.webp")
+        XCTAssertEqual(PageExport.suggestedFileName(documentName: "big.cbr", page: 0,
+                                                    pageCount: 1200, fileExtension: "bin"),
+                       "big-p0001.bin", "补零位宽跟总页数走,与 ⌘S 同一份实现")
+    }
+
+    // MARK: - 批量导出的扩展名(2026-09-21)
+
+    /// 判据一:**条目原名里的扩展名优先** —— 它带着打包者的原始信息。
+    /// 大小写要归一到小写(访达不认 `.PNG`,但 `UTType` 认;统一小写两边都对)
+    func testFileExtensionPrefersTheOriginalEntryExtension() {
+        let png = Self.pngMagic + Data(repeating: 0, count: 32)
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "vol01/page1.PNG", data: png),
+                       "png")
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "a/b/cover.jpeg", data: png),
+                       "jpeg", "原名说是 jpeg 就落 jpeg,不按魔数改口")
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "p.jpg", data: png),
+                       "jpg")
+    }
+
+    /// 无扩展名的条目(老式扫描包的 `vol01/001`):**靠魔数救回来**。
+    /// 阅读时 ImageIO 按内容识别、根本不看扩展名,所以这些页照样能显示;
+    /// 导出时少了这一步,它们会全部落成 `.bin`,在访达里双击打不开
+    func testFileExtensionSniffsWhenEntryHasNoExtension() {
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "vol01/001",
+                                                      data: Self.pngMagic), "png")
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "vol01/002",
+                                                      data: Self.jpegMagic), "jpg")
+    }
+
+    /// 含数字的"扩展名"不是扩展名 —— `ch01.p01` 的 `p01` 是名字的一部分。
+    /// 拿它落盘会得到一堆系统不认识的文件(`.p01` 没有关联的图片查看器)
+    func testFileExtensionRejectsDigitBearingExtension() {
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "ch01.p01",
+                                                      data: Self.pngMagic),
+                       "png", "p01 含数字 → 当没扩展名,按魔数嗅")
+    }
+
+    /// 兜底是 `.bin` 而**不是**猜一个 `.jpg`:包里混进被当成页的非图片
+    /// (`vol01/notes` 这种纯文本)时,如实标成未知 ——
+    /// 谎报成 jpg 会让用户以为"导出的图坏了"
+    func testFileExtensionFallsBackToBinForUnknownBytes() {
+        let text = Data("a note, 13 B".utf8)
+        XCTAssertEqual(PageExport.exportFileExtension(forEntryPath: "vol01/notes", data: text),
+                       "bin")
+        XCTAssertNil(PageExport.sniffedExtension(text), "认不出来就不认")
+        XCTAssertNil(PageExport.sniffedExtension(Data([0x89, 0x50, 0x4E])), "不足 4 字节不做判断")
+        XCTAssertNil(PageExport.sniffedExtension(Data()))
+    }
+
+    /// 嗅探表覆盖的是**系统必然能显示**的那几种;表外的一律 nil(不猜)。
+    /// 这一条同时是「以后有人往 `isListedImage` 里加格式」的提醒:
+    /// 阅览支持新格式时,这里也跟着该加一条,否则导出会退化成 `.bin`
+    func testSniffedExtensionRecognisesSystemDisplayableFormats() {
+        let cases: [(String, Data)] = [
+            ("png",  Self.pngMagic),
+            ("jpg",  Self.jpegMagic),
+            ("gif",  Data([0x47, 0x49, 0x46, 0x38, 0x39, 0x61])),
+            ("bmp",  Data([0x42, 0x4D, 0x00, 0x00])),
+            ("tiff", Data([0x49, 0x49, 0x2A, 0x00])),
+            ("tiff", Data([0x4D, 0x4D, 0x00, 0x2A])),
+            ("webp", Data("RIFF".utf8) + Data([0, 0, 0, 0]) + Data("WEBP".utf8)),
+            ("avif", Self.isoBMFF("avif")),
+            ("heic", Self.isoBMFF("heic")),
+            ("heif", Self.isoBMFF("mif1")),
+        ]
+        for (expected, data) in cases {
+            XCTAssertEqual(PageExport.sniffedExtension(data), expected,
+                           "\(expected) 魔数没被认出来")
+        }
+        XCTAssertNil(PageExport.sniffedExtension(Self.isoBMFF("mp42")),
+                     "MP4 也是 ISO-BMFF,但不是图片 —— 不许蹭成 heic")
+    }
+
+    // MARK: - 魔数样本
+
+    private static let pngMagic = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+    private static let jpegMagic = Data([0xFF, 0xD8, 0xFF, 0xE0])
+
+    /// ISO-BMFF 头:`00 00 00 18` + `ftyp` + 4 字节兼容品牌
+    private static func isoBMFF(_ brand: String) -> Data {
+        Data([0x00, 0x00, 0x00, 0x18]) + Data("ftyp".utf8) + Data(brand.utf8)
+    }
 }

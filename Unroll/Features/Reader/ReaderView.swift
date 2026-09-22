@@ -85,6 +85,13 @@ struct ReaderView: View {
                                     set: { if !$0 { viewModel.dismissGrid() } })) {
             PageGridSheet(viewModel: viewModel)
         }
+        // 导出本卷页文件(⇧⌘E,2026-09-21)。同样用自定义 Binding —— 用户按 Esc /
+        // 点外面关掉时,SwiftUI 只把标志置 false,那样**导出会在后台接着跑到完**,
+        // 而界面已经看不见它了(白烧 CPU、还在往磁盘里写)。统一交给 dismissExport()
+        .sheet(isPresented: Binding(get: { viewModel.isExportSheetPresented },
+                                    set: { if !$0 { viewModel.dismissExport() } })) {
+            PageExportSheet(viewModel: viewModel)
+        }
     }
 }
 

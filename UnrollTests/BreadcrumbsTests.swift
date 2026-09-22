@@ -3,6 +3,7 @@
 // ----------------------------------------------------------------------------
 // 全部用**临时目录**注入,不碰真实 App Support(测试不留痕);
 // 隐私红线的断言是硬性的:落盘内容里不得出现任何路径 / 文件名特征。
+import ArchiveKit
 import XCTest
 @testable import Unroll
 
@@ -114,6 +115,30 @@ final class BreadcrumbsTests: XCTestCase {
         XCTAssertFalse(text.contains("/Users"))
         XCTAssertFalse(text.contains(".cbz"))
         XCTAssertFalse(text.contains(FileManager.default.homeDirectoryForCurrentUser.path))
+    }
+
+    /// 批量导出事件(2026-09-21)的标签必须**真的落得下去**。
+    ///
+    /// 这一条与上面的隐私断言是**反方向**的:值被 `sanitize` 悄悄丢掉时,隐私守卫
+    /// 照样全绿(文件里确实没有路径),但诊断线索也没了 —— 那是「守卫的第二种失效」。
+    /// 所以四个停止标签都要逐个验一遍:它们是 `PageSequenceStop.token` 的产物,
+    /// 而 `sinkStopped` 这种驼峰长词就在白名单边缘上
+    func testExportEventsSurviveThePrivacyGate() {
+        let crumbs = makeBreadcrumbs()
+        crumbs.record(.pageExportStarted(pages: 421))
+        crumbs.record(.pageExportFinished(written: 420,
+                                          stop: PageSequenceStop.sinkStopped.token))
+
+        let text = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+        XCTAssertTrue(text.contains("\"v\":\"421\""), "开始事件的页数必须落得下去")
+        XCTAssertTrue(text.contains("420:sinkStopped"),
+                      "结束事件的值必须落得下去 —— 被 sanitize 丢掉的话诊断线索就没了")
+        XCTAssertFalse(text.contains("/Users"))
+
+        for stop in [PageSequenceStop.finished, .cancelled, .sinkStopped, .stalled] {
+            XCTAssertEqual(Breadcrumbs.sanitize(stop.token), stop.token,
+                           "\(stop.token) 过不了隐私闸门,导出事件会静默变成空值")
+        }
     }
 
     func testSizeBucketBoundaries() {
