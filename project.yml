@@ -25,8 +25,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: "6.0"       # Swift 6 语言模式 = strict concurrency(§3.1)
-    MARKETING_VERSION: "1.1.0" # 版本号唯一来源,M4 的 build-app.sh 从这里读
-    CURRENT_PROJECT_VERSION: "2" # 1.1.0 的第二次构建(导出本卷页文件落地)。注意:构建期会被 build-app.sh 的 $VERSION 覆盖,不改二进制,只把"最后一次改动产物路径的提交"挪到本笔
+    MARKETING_VERSION: "1.2.0" # 版本号唯一来源,M4 的 build-app.sh 从这里读
+    CURRENT_PROJECT_VERSION: "1" # 1.2.0 的第一次构建(可发现性三件套落地)。注意:构建期会被 build-app.sh 的 $VERSION 覆盖,不改二进制;本行的作用是让 project.yml 成为"最后一次改动产物路径的提交",从而满足前检判据①
 
 targets:
   # ---------------------------------------------------------------- App 壳 --
