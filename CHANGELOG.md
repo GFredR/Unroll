@@ -1,5 +1,21 @@
 # Changelog
 
+## 未发布 / Unreleased
+
+**可发现性三件套** —— 补上三处「东西在、但没人找得到」的空档。菜单栏里有 23 条带快捷键的命令，但发现它们的唯一途径是翻菜单栏；冷启动的空窗口什么提示都没有；而**画布手势**（点左右半屏、滑动翻页、双击缩放）是菜单里根本不存在的东西，更没有入口。三个展示面各面向一个时机，内容刻意不重叠：
+
+**中文**
+- **空态欢迎页**：图标 + 标题 + 「打开文件…」+ 一行常用快捷键 + **最近打开**（带续读进度，如 `vol01.cbz · P.12/48`）。最近打开的记录本应用一直在存，只是空窗口上从来没显示过 —— 现在打开 App 就能接着上次那本看。最多列 4 条：它是欢迎页不是管理器，列满就把「打开文件…」挤出视觉重心了
+- **帮助菜单**（此前**是空的**）：「键盘快捷键…」（`⌘?`）列出全部快捷键，并把**菜单里没有的五个画布手势**单独成组 —— 那一组是这份清单唯一能告诉你的东西；另有「显示阅读提示」与「项目主页」
+- **首次阅读提示条**：第一次打开一本归档时，画布上方出现一行可关闭的提示（点左右半屏 / 滑动 / 双击或捏合缩放），点「×」或按 `⌘?` 看更多。它**只自动出现一次**，之后想再看走「帮助 → 显示阅读提示」。三处入口讲的是三件不同的事：空态讲怎么开始、帮助面板讲全部命令、提示条只讲那些**菜单里查不到**的手势
+- **它不是浮层**：提示条占据的是窗口布局里的一行，图片拿到的是扣掉它之后的高度 —— 从结构上就不可能盖住页面内容（浮层式引导要靠"算准不遮挡"，那是另一回事）
+
+**English**
+- **Empty-state welcome screen**: icon, title, an "Open file…" button, a line of common shortcuts, and **your recent archives** with reading progress (`vol01.cbz · P.12/48`). The app has always stored those records — it just never showed them on the empty window. Up to four entries: this is a welcome screen, not a manager, and a full list would push "Open file…" out of focus.
+- **A Help menu** (there was **none**): "Keyboard shortcuts…" (`⌘?`) lists every shortcut and puts the **five canvas gestures that have no menu item** in their own group — that group is the one thing only this panel can tell you. Plus "Show reading tips" and the project homepage.
+- **A first-read tip bar**: the first time you open an archive, a dismissible line appears above the canvas (click either half / swipe / double-click or pinch to zoom). It appears **once**; after that, "Help → Show reading tips" brings it back. The three entry points answer three different questions: the welcome screen tells you how to start, the Help panel lists every command, and the tip bar covers only the gestures you **cannot find in any menu**.
+- **It is not an overlay**: the tip bar occupies a row in the window layout, and the page gets the height that remains — so it cannot cover content by construction, rather than by being positioned carefully.
+
 ## 1.1.0 — 2026-09-21 · 首次公开发布 / First public release
 
 **首次公开发布。** 它包含 1.0.x 那条线的全部内容（下面各段），外加本版新落地的四项——缩略图网格、跳转面板就地预览、连续滚动、导出本卷页文件——以及滚动模式带出来的一个横向裁切修复。

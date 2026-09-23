@@ -24,6 +24,8 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 - **Page cache with a pixel budget** — at most 8 full-resolution pages and 200 M pixels are kept in memory, and the thumbnail pool has its own 20 M pixel budget on top of its count cap. Evicted pages are demoted to a 1600 px thumbnail rather than dropped outright, so scrubbing back is instant instead of a re-decode.
 - **Single page & two-page spreads, including right-to-left (manga)** — spreads advance two pages at a time; flipping the reading direction only mirrors the spread and never moves your position. **Cover on its own page** (`⌥⌘C`) matches how a manga volume is actually bound: the cover stands alone, then 1-2 / 3-4 pair up. Off by default, since not every cbz is laid out as a bound volume.
 - **Quick Look integration** — press `Space` on an archive in Finder to see its cover and page count without opening the app, and let Finder show the actual cover as the file icon instead of a generic archive glyph. It ships as **two** bundled extensions (thumbnail + preview), because macOS allows exactly one extension point per `.appex`. Encrypted or unreadable archives deliberately fall back to the system icon rather than a misleading placeholder. Only `cbz / cbr / cb7 / cbt` are claimed — plain `.zip` is left alone, so ordinary ZIP files never route through Unroll.
+- **A welcome screen, not a blank window** — the empty state shows your recent archives **with the page you stopped on** (`vol01.cbz · P.12/48`) plus a line of the shortcuts you will actually use. The app had been storing those records all along; it just never showed them.
+- **A Help menu** (`⌘?`) — every shortcut in one list, with the **five canvas gestures that have no menu item at all** in their own group: nothing else in the app tells you those exist. The first time you open an archive, a dismissible tip bar appears above the page — once, and only once; "Help → Show reading tips" brings it back whenever you want it. The bar is **a row in the layout rather than an overlay**, so the page gets the height that remains and cannot be covered by construction.
 - **Keyboard-first** — every action is reachable without touching the mouse.
 - **HUD overlay** — filename, page number and a progress bar; fades out 2.5 s after you stop moving.
 - **Recent documents** — the last 10 archives, remembered with security-scoped bookmarks so the sandbox can reopen them. The menu lists file names only, and shows how far you got in each one.
@@ -165,6 +167,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | `⌘3` / `⌘4` / `⌘5` / `⌘6` | Fit window / fit width / fit height / actual size (1:1) |
 | `⌘D` | Add / remove a bookmark on the current page |
 | `⌥⌘↑` / `⌥⌘↓` | Previous / next bookmark (wraps at the ends) |
+| `⌘?` | Keyboard shortcuts — every command, plus the canvas gestures that have no menu item |
 | `←` / `→` | Previous / next page — follows the reading direction |
 | `Space` `↓` `Page Down` `End` | Next page |
 | `Page Up` `Home` | Previous page |
