@@ -310,6 +310,23 @@ else
     ok "受控文件未命中本机路径 / 私人邮箱关键词"
 fi
 
+# 提交消息是**另一个通道**(2026-09-23 补上这道):它同样随 push 公开,
+# 代价却高一个量级 —— 文件里的泄漏删掉重提交就行,消息里的泄漏要
+# filter-repo 重写历史 + force-push。而**没有人会回头重读旧的 commit
+# message**,所以它天然是盲区。用的是同一个 PATTERN,扫 `%B` 全文(不只 subject)。
+# ⚠️ 命中时**只报哈希与日期、不报内容** —— 把命中行打出来正好是把要防的
+#    东西显示到终端/CI 日志里,守卫自己完成一次泄漏。
+MSG_OUT="$(Scripts/scan-commit-messages.sh "$PATTERN" 2>&1)"
+MSG_RC=$?
+if [ "$MSG_RC" -eq 0 ]; then
+    ok "提交消息未命中($(git rev-list --count HEAD) 条,含多行正文)"
+elif [ "$MSG_RC" -eq 1 ]; then
+    fail "有提交消息命中泄漏关键词(内容刻意不打印,用 git show <哈希> 自查):"
+    printf '%s\n' "$MSG_OUT" >&2
+else
+    fail "提交消息扫描未能完成 —— 前置不满足(不在 git 仓库 / git 不可用)"
+fi
+
 # ------------------------------------------------------------- 7. 远程状态 --
 step "[7/8] 远程仓库状态"
 
