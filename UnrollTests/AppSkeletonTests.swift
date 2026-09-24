@@ -190,4 +190,38 @@ final class AppSkeletonTests: XCTestCase {
         //    刚进视野才开始解码(那样每次滚动都会先看到一次占位框)
         XCTAssertGreaterThanOrEqual(Budget.scrollActiveWindow, 2)
     }
+
+    /// 阅读层周边控件与窗口几何的**不变量**(2026-09-23)。
+    ///
+    /// 这批数字大多是一次性的版式判断(栏宽、格高、初始窗口尺寸),锁死具体
+    /// 数值只会换来"每调一次版式就改一次测试"—— 所以这里只锁**破掉就会退回
+    /// 用户当初抱怨的那个状态**的关系。
+    func testChromeAndWindowTokensKeepTheExitFindable() {
+        typealias Chrome = DesignSystem.Chrome
+        typealias Window = DesignSystem.Window
+
+        // ① 用户原话是「鼠标不在,可以淡化显示」—— 淡化**不是**消失。
+        //    `idleOpacity` 取 0,「返回按钮没找到」会原样回来(那时整组控件
+        //    在静默时不可见);取 1 则根本不成其为淡化(永远全亮)
+        XCTAssertGreaterThan(Chrome.idleOpacity, 0)
+        XCTAssertLessThan(Chrome.idleOpacity, 1)
+
+        // ② 左右箭头的点击区不许小于 44×44(AGENTS.md 十三.3 的 HIG 下限)。
+        //    ⚠️ 这条断言**先于修正存在**:2026-09-23 写下它时 `arrowHitWidth`
+        //    真的是 40,而同一行的注释却写着"横向仍守 44 的 HIG 下限" ——
+        //    注释是对的、数字是错的。是这条测试把那个数逼回 44 的
+        XCTAssertGreaterThanOrEqual(Chrome.arrowHitWidth, 44)
+        XCTAssertGreaterThanOrEqual(Chrome.arrowHitHeight, 44)
+
+        // ③ 最小窗口扣掉左栏之后,画布不许比**加栏之前的最小窗口**更窄(720)。
+        //    这正是当初押后左栏的那条理由(「720 会被压到约 560」)——
+        //    同批把最小窗口一起放大是它的**处置**,不是另一次独立改动。
+        //    调小 `minWidth` 或调大 `railWidth` 都会当场撞上这条
+        XCTAssertGreaterThanOrEqual(Window.minWidth - Chrome.railWidth, 720)
+
+        // ④ 默认尺寸必须**真的比最小尺寸大**:两者若相等,
+        //    「初始窗口加大三分之一」就没有发生(退化成"只是把下限抬高")
+        XCTAssertGreaterThan(Window.defaultWidth, Window.minWidth)
+        XCTAssertGreaterThan(Window.defaultHeight, Window.minHeight)
+    }
 }

@@ -126,4 +126,60 @@ enum DesignSystem {
         /// 看着活动监视器才发现。
         static let scrollActiveWindow = 3
     }
+
+    /// 主窗口几何(2026-09-23)。
+    ///
+    /// 为什么这几个数要搬到这里:它们此前是 `UnrollApp` 里的字面值,而
+    /// 「最小窗口够不够放下左栏 + 一张看得清的页面」这条判断**没有任何地方能查** ——
+    /// 它只活在一条注释里。搬过来之后 `AppSkeletonTests` 才拿得到它们做断言
+    /// (AGENTS.md 六.8:常量集中、业务代码不散落字面值)。
+    enum Window {
+        /// **默认尺寸** = 原最小尺寸 720×480 各乘 4/3(用户 2026-09-23:
+        /// 「初始窗口应该整体加大三分之一」)。它是**起点**,不是下限
+        static let defaultWidth: CGFloat = 960
+        static let defaultHeight: CGFloat = 640
+
+        /// **最小尺寸**:由 720×480 抬到 880×600,理由不是那个 4/3,而是
+        /// 同批新增的左侧缩略图栏 —— 栏占 `Chrome.railWidth`(112pt),
+        /// 最小窗口若仍是 720,画布只剩 608,**比加栏之前的整套 720 还窄**。
+        /// 880 让画布回到 768,反而比改动前宽。这条不变量由 `AppSkeletonTests` 锁住
+        static let minWidth: CGFloat = 880
+        static let minHeight: CGFloat = 600
+    }
+
+    /// 阅读层周边控件(左侧缩略图栏 / 左右翻页箭头 / 回网格按钮,2026-09-23)。
+    ///
+    /// 这一组 token 的存在理由与 `PageBudget` 那组不同:它们不是资源预算,而是
+    /// **一次性的版式判断**,集中在这里是因为同一个数字要在多处对齐(栏宽既决定
+    /// 栏自身的宽,又决定滚轮监视器让位的横向分界线 —— 两处必须取同一个值,
+    /// 否则「滚 rail 会不会连带翻页」会随两处取值漂移)
+    enum Chrome {
+        /// 鼠标静默时整组控件的**淡化下限**。刻意不是 0 ——
+        /// 用户的原话是「鼠标不在,可以淡化显示」:要的是不抢戏,不是消失。
+        /// 0.45 是「白字落在纯黑画布上仍读得出」的下限区间
+        static let idleOpacity: Double = 0.45
+
+        /// 左侧缩略图栏宽度。也是滚轮让位分界线(见 ReaderCanvas 的滚轮监视器):
+        /// 窗口坐标原点在左下角,`locationInWindow.x < railWidth` 即「鼠标在栏上」
+        static let railWidth: CGFloat = 112
+
+        /// 栏内单格高度。缩略图按比例 fit 在这个高度里 ——
+        /// 108pt 下一屏(640 高)能看到 5 格,够回答「我在全卷哪儿」
+        static let railThumbHeight: CGFloat = 108
+
+        /// 栏底色。画布是纯黑,栏要比它**略亮**才看得出是一栏 ——
+        /// 只靠一条分隔线在纯黑上几乎不可见
+        static let railBackground = Color.white.opacity(0.06)
+
+        /// 翻页箭头的点击区。两个方向都**不许低于 44**(AGENTS.md 十三.3 的
+        /// HIG 最小点击区);高取 64 而非 44 是因为它是纵向居中的长条,
+        /// 鼠标从画布边缘滑进来时命中面更大。
+        ///
+        /// ⚠️ 2026-09-23 同日修:`arrowHitWidth` 原写 40,而同一行的注释写着
+        /// 「横向仍守 44 的 HIG 下限」—— **注释是对的,数字是错的**。
+        /// 这种"注释与代码各说一套"比单纯的数字错误更坏:读代码的人会
+        /// 相信那句注释,于是永远不会去看那个数
+        static let arrowHitWidth: CGFloat = 44
+        static let arrowHitHeight: CGFloat = 64
+    }
 }

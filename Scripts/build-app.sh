@@ -28,16 +28,27 @@ mkdir -p "$DIST_DIR"
 # 的产物会被自己的守卫拦下(2026-09-16 实测,方向完全反了)。
 # 现在改为**内容判据**:构建时把 HEAD 提交号写进 buildinfo 侧车文件,发布前检只比
 # 字符串相等,时间不再参与任何判断。
-COMMIT="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
-# dirty 只看**已跟踪**文件:Unroll.xcodeproj 与两个 appex 的 Info.plist 都是
-# xcodegen 生成物、已在 .gitignore 里,不该因为「构建过程重写了它们」就把一次
-# 干净构建判成脏构建(那会让守卫长期误报,人就会开始忽略它)。
-if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
-  COMMIT_DIRTY=1
-else
-  COMMIT_DIRTY=0
+#
+# ⚠️ 2026-09-24:这三行抽去了 Scripts/git-tree-state.sh。抽出来**不是为了复用**,
+#    而是为了能被反向测试 —— 原先内联在这里时,要验证「未跟踪文件算不算脏」只能
+#    跑完整次 archive,于是那道判据从来没被验证过(见 Scripts/test-build-guards.sh)。
+#    同批修掉一个真空洞:旧写法带 `--untracked-files=no`,而 project.yml 的 sources
+#    是**目录级**的、构建前又会跑 regen.sh ⇒ 一个未 git add 的新 .swift 会被编进
+#    二进制,侧车却写 dirty=0。现在未跟踪也算脏,理由与实测写在那个脚本里。
+GIT_STATE_RC=0
+GIT_STATE="$(Scripts/git-tree-state.sh .)" || GIT_STATE_RC=$?
+if [ "$GIT_STATE_RC" -ne 0 ]; then
+  echo "  ✗ 读不到 git 状态(退出码 $GIT_STATE_RC):$GIT_STATE" >&2
+  echo "    侧车必须能回答「这份产物来自哪个提交」,不能猜 —— 就此止步。" >&2
+  exit 1
 fi
+COMMIT="$(printf '%s\n' "$GIT_STATE" | sed -n 's/^commit=//p' | head -1)"
+GIT_BRANCH="$(printf '%s\n' "$GIT_STATE" | sed -n 's/^branch=//p' | head -1)"
+COMMIT_DIRTY="$(printf '%s\n' "$GIT_STATE" | sed -n 's/^dirty=//p' | head -1)"
+COMMIT="${COMMIT:-unknown}"
+GIT_BRANCH="${GIT_BRANCH:-unknown}"
+# 取不到就按「脏」处理:宁可让一份来源不明的产物被判成不可发布,也不要放过它
+COMMIT_DIRTY="${COMMIT_DIRTY:-1}"
 
 APP_NAME="Unroll"
 SCHEME="${SCHEME:-Unroll-Distribution}"
@@ -181,32 +192,12 @@ echo "  最低系统: $(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersio
 
 # 文件关联是「双击即用」的命脉:漏了 UTI,装完也抢不到默认打开权
 #
-# 校验的是**具体标识符在不在**,不是数量。2026-09-16 复查发现问题:原先只卡
-# 「UTI ≥ 4 且文档类型 ≥ 5」的数量下限,而自 2026-09-14 新增裸 .rar / .7z 关联后
-# 实际已是 6 / 7 —— 此时若 cbz 声明被误删而 rar/7z 还在,计数为 5,照样通过。
-# 这正是这道防线本该拦住的沉默故障(装完看着正常,双击 .cbz 没反应)。
-UTI_LIST="$(/usr/libexec/PlistBuddy -c 'Print :UTExportedTypeDeclarations' "$INFO" 2>/dev/null || true)"
-UTI_COUNT="$(printf '%s\n' "$UTI_LIST" | grep -c 'UTTypeIdentifier' || true)"
-DOC_COUNT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDocumentTypes' "$INFO" 2>/dev/null | grep -c 'CFBundleTypeName' || true)"
-echo "  文件关联: 导出 UTI ${UTI_COUNT:-0} 个 / 文档类型 ${DOC_COUNT:-0} 个"
-
-MISSING_UTI=""
-for U in cbz cbr cb7 cbt; do
-  # 用 grep -c(读到 EOF)而不是 grep -q(命中即退):后者配上 pipefail 会在
-  # printf 收到 SIGPIPE 时把整条管道判失败,于是**每个** UTI 都报"缺失",
-  # 变成一次纯属虚构的构建失败(同上文 codesign 那处是同一类坑)
-  U_HITS="$(printf '%s\n' "$UTI_LIST" | grep -c "UTTypeIdentifier = com.gfredr.unroll.$U\$" || true)"
-  if [ "${U_HITS:-0}" -eq 0 ]; then MISSING_UTI="$MISSING_UTI $U"; fi
-done
-if [ -n "$MISSING_UTI" ]; then
-  echo "  ✗ 缺导出 UTI 声明:$MISSING_UTI —— 装完无法双击打开对应格式" >&2
-  exit 1
-fi
-# 文档类型数量只做宽松下限(防止关联表整体塌掉);具体格式由上面的标识符校验负责
-if [ "${DOC_COUNT:-0}" -lt 5 ]; then
-  echo "  ✗ 文档类型声明过少($DOC_COUNT 个)—— 至少需 cbz/cbr/cb7/cbt + zip Alternate" >&2
-  exit 1
-fi
+# ⚠️ 2026-09-24:这段校验抽去了 Scripts/check-file-associations.sh。同样的理由 ——
+#    内联在这里时**只有跑完整次 archive 才碰得到**,于是「缺一个 UTI」那条分支
+#    从来没被反向测试过,而它拦的正是最沉默的一类故障(装完看着正常、
+#    双击 .cbz 没反应、不报错)。抽出来后 Scripts/test-build-guards.sh 用
+#    /tmp 里的假 .app 就能把每条分支注入一遍。判据本身一字未改。
+Scripts/check-file-associations.sh "$APP_DIR"
 
 # Dock 图标是「像个正经 App」的底线:没编进 icns,Dock/Finder 只能显示通用白板
 # (2026-09-14 实测踩坑:project.yml 缺 ASSETCATALOG_COMPILER_APPICON_NAME 时静默丢失)

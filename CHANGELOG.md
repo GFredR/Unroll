@@ -1,5 +1,63 @@
 # Changelog
 
+## 未发布 / Unreleased — 2026-09-23 两批（网格默认层 + 阅读层周边控件）与 2026-09-24 一批（工程与发布链加固）
+
+> ⚠️ 下列改动落在 `1.2.0` 冻结（产物 tip `34bedb2`、`v1.2.0` tag）**之后**，**不在 1.2.0 的产物里**，也**没有升版本号**。下一次发版时应并入对应的版本段，并随那次一起重出产物。此刻的产物状态见 [`docs/发布清单.md`](docs/发布清单.md) §2。
+
+### 网格从浮层面板变成打开后的默认层
+
+**中文**
+- **打开归档直接落在缩略图网格上**（信息架构调整）——选中一个包，先看到整卷；点任一格从那里开始读，`Esc`（或 HUD 上的网格按钮 `⇧⌘G`）回到网格。网格从「`⇧⌘G` 打开的浮层面板」变成「打开后的默认层」，与阅读层构成两级、可互相返回。此前打开归档直接进第 1 页大图，想看目录得先按一次 `⇧⌘G`
+- **切层不再取消正在跑的扫描**：面板时代关掉网格会顺手 `cancel()` 本轮（当时的理由是"看不见的重活不该继续烧 CPU"）；网格变成层之后，"切到阅读层"成了最常见的动作，取消会让你回来时看到一个半空的网格。现在取消的唯一入口是显式停止
+- **扫描的收尾报告与视图终态分开**：扫描结束的那一刻，无论你在哪一层都记下报告（它是一份数据），但只在网格可见时把它写进视图终态 —— 否则在阅读中结束的一轮扫描会把你莫名拉回网格
+- 两处落点随之调整：打开归档后不再往阅读层堆"进入网格"的提示（默认就在网格上），底栏改为常驻的"点一格开始阅读 · 按 Esc 返回"
+
+**English**
+- **Opening an archive now lands on the thumbnail grid** (information-architecture change): pick a volume and you see the whole book first; click a cell to start reading there, and `Esc` (or the grid button in the HUD, `⇧⌘G`) takes you back. The grid moves from a `⇧⌘G` panel to the default layer after opening, and the reader is the second layer — you can move between them freely. Previously an archive opened straight on page 1, so seeing the contents meant pressing `⇧⌘G` first.
+- **Switching layers no longer cancels a scan in flight**: the panel version cancelled the current run when you closed it; now that moving to the reader is the common action, cancelling would leave you looking at a half-filled grid on the way back. Cancellation now has exactly one entry point: an explicit stop.
+- **The scan's final report is recorded independently of the view**: the moment a scan finishes, the report is stored whatever layer you are on (it is data), but the view's terminal state is written only while the grid is visible — otherwise a scan that finished during reading would yank you back to the grid.
+- Two knock-on changes: opening an archive no longer shows a "go to the grid" hint on the reader layer (the grid is where you already are), and the grid footer carries a permanent "click a page to read · Esc goes back" line.
+
+### 阅读层周边控件（同日、更晚一批）
+
+**中文**
+- **新增：阅读层左侧常驻的单列缩略图栏** —— 整卷一览 + 当前页描边，点一格跳页（**不切层**）。数据复用网格池，**零额外 I/O**；池子还没生成到那一页时格子显示**页码**而不是空白（空白会被读成"这一页是空的"）
+- **新增：常驻的「‹ 全部页面」返回按钮**（栏顶部）—— 此前回网格的唯一可见入口是 HUD 里那枚「浏览」，而 HUD 在鼠标静止 2.5s 后整体淡到 0 **并且关掉命中测试**，等于"要先把鼠标晃醒它才可能出现"。这条**回头路**现在有了一个不会消失的位置
+- **新增：画布两侧的翻页箭头** —— 语义跟随阅读方向（右开时「下一页」在左）。连续滚动没有「摊」这个概念，那一档下箭头不出现（左栏保留）
+- **改动：鼠标静置时控件淡化到 45%，而不是消失** —— 淡化不等于失效：左栏与返回按钮**始终可点**；箭头跟随可见性（它们贴着的画布边缘本来就是半屏点击翻页）
+- **改动：窗口整体放大三分之一** —— 初始窗口 **960×640**（原最小 720×480 各乘 4/3）；**最小尺寸抬到 880×600**，因为左栏占 112pt —— 最小窗口若仍是 720，画布只剩 608，**比改动前还窄**
+- 验证：`ONLY=chrome` 一段 UI 取证（断言停在阅读层 + 左栏数据源确实接上了网格池）。⚠️ 它**不覆盖**鼠标静默时的淡化、也不覆盖箭头方向语义（脚本自己会打印这句）；本批**没有新增功能层单元测试**，新增的是 `AppSkeletonTests` 里三条不变量 —— 其中箭头点击区那条**当场抓到一个真错**（`arrowHitWidth` 原写 40，同行注释却写着"仍守 44 的 HIG 下限"：注释对、数字错）
+
+**English**
+- **New: a permanent single-column thumbnail rail in the reading view** — the whole volume at a glance with the current page outlined; click a cell to jump there (without leaving the reader). It reuses the grid pool, so there is **no extra I/O**; a cell whose thumbnail has not been generated yet shows its **page number** rather than an empty box (an empty box reads as "this page is blank").
+- **New: a permanent "‹ All pages" button** at the top of the rail. The only visible way back to the grid used to be the "Browse" button inside the HUD, and the HUD fades to zero **and stops accepting clicks** 2.5 s after the mouse stops — you had to wake the mouse before it could even appear. That way back now has a place that does not vanish.
+- **New: page arrows on both edges of the canvas** — their meaning follows your reading direction (under right-to-left order, "next page" is the left one). Continuous scroll has no spreads, so the arrows do not appear there (the rail stays).
+- **Changed: when the mouse is idle the controls dim to 45% instead of disappearing** — dimming is not disabling: the rail and the back button stay clickable, while the arrows follow visibility (the canvas edge they sit on is a half-screen tap-to-turn zone anyway).
+- **Changed: the window grew by a third** — the initial window is **960×640** (the old minimum 720×480 scaled by 4/3), and the **minimum is raised to 880×600**: the rail takes 112pt, so a 720 minimum would leave a 608pt canvas — narrower than before the rail existed.
+- Verification: one `ONLY=chrome` UI-evidence run (asserts the app is on the reader layer and that the rail's data source is wired to the grid pool). ⚠️ It does **not** cover the idle dimming, nor the arrows' direction semantics (the script prints that caveat itself). This batch adds **no functional unit tests**; what it adds is three invariants in `AppSkeletonTests`, one of which **caught a real error on the spot** (`arrowHitWidth` was written as 40 while the comment on the same line said "still honours the 44 HIG floor" — the comment was right, the number was wrong).
+
+### 四条已知缺陷的真修（2026-09-24）—— 只动工程与发布链，App 行为不变
+
+**中文**
+- **修掉「产物↔源码」判据②的一个真空洞**：`build-app.sh` 原先用 `git status --porcelain --untracked-files=no` 取 `dirty`，于是**未跟踪文件不算脏**。而 `project.yml` 的 `sources` 是**目录级**的、构建前还会跑 `regen.sh` ⇒ 一个"新建但还没 `git add` 的 `.swift`"会被编进二进制，侧车却照样写 `dirty=0`。现在改为**未跟踪也算脏**（抽成 `Scripts/git-tree-state.sh`，为的是能被反向测试）
+- **UTI / 文档类型校验抽出成脚本**（`Scripts/check-file-associations.sh`，判据一字未改）：原先它内联在**只有跑完整次 archive 才执行**的位置，所以"缺一个 UTI"那条分支从来没被反向测试过 —— 这类故障最沉默（装完看着正常、双击 `.cbz` 没反应、不报错）
+- **新增两个反向测试脚本**：`Scripts/test-build-guards.sh`（14 条：`dirty` 空洞 + UTI 点名）、`Scripts/test-history-scan.sh`（11 条：历史对象泄漏扫描）。都在 `/tmp` 里现造输入，**不需要真实产物**，1 秒级可跑
+- **泄漏扫描补上两个"事后删不掉"的盲区**：① 已删除文件的**历史内容**（工作区看着干净，对象库里还在）② **二进制**里的字符串。新 `Scripts/scan-history-blobs.sh` 扫 `git cat-file --batch-all-objects`（比 `rev-list --all` 更全，**连 dangling 对象也扫** —— 它们照样会被 push），已接进 `publish.sh` 第 6 步，现在是**三通道**
+- **优雅退出链路首次在本机取证成功**（`Scripts/probe-graceful-exit.sh`）：此前从外面发 ⌘Q 要经 Apple Events，而 ad-hoc 重签后该授权在 TCC 里失效（实测 `-10004`），只能拿"强杀会被检出"当替代证据 —— 而那与"优雅退出会收尾"是**方向相反**的两件事。现在由 `DemoDriver` 的 `demo-quit` 场景经**响应者链**发 `terminate:`（与菜单里「退出 Unroll」项逐字同路），断言磁盘效果（`session.json` 的 `alive=false` + 面包屑末条 `appTerminated`），另配 `MODE=abnormal` 反向对照证明这两条断言**当场会红**
+- 实测：Debug 版 `demo-quit` 走通、`alive=false` + `appTerminated` 两条判据全绿；`MODE=abnormal`（强杀）下两条**全红**。整条构建链在 `/tmp` 里另跑一遍 rc=0（两条抽出的守卫在真实构建里都通过）
+- ⚠️ 已知仍未覆盖：**「关窗口」是否真的会退出 App**。代码里**没有实现** `applicationShouldTerminateAfterLastWindowClosed`，按 AppKit 默认关掉最后一个窗口**不会**退出 —— 因此 `UnrollApp.swift` 注释里「⌘Q / 关窗口」的后半截**存疑**（已登记，见 `docs/测试与验证.md` §22.6）
+- 单元测试**数量不变**（337 用例 / 335 通过 / 2 skip / 0 失败）—— 本批新增的全是 shell 脚本级的反向测试
+
+**English**
+- **Closed a real hole in the artifact↔source check (`dirty`)**: `build-app.sh` computed `dirty` with `git status --porcelain --untracked-files=no`, so **untracked files did not count as dirty**. Because `project.yml`'s `sources` are directory-level and the build runs `regen.sh` first, a brand-new `.swift` that was never `git add`ed **did get compiled into the binary** while the sidecar still said `dirty=0`. Untracked files now count as dirty (extracted into `Scripts/git-tree-state.sh` so it can be reverse-tested).
+- **The UTI / document-type check is now a script** (`Scripts/check-file-associations.sh`, criteria unchanged). It used to be inlined where it could only be reached by running a full archive, so the "one UTI missing" branch had **never been reverse-tested** — and that failure is the silent kind (installs fine, double-clicking a `.cbz` does nothing, no error shown).
+- **Two new reverse-test scripts**: `Scripts/test-build-guards.sh` (14 cases) and `Scripts/test-history-scan.sh` (11 cases). Both build their fixtures in `/tmp` and need **no real artifacts**, so they run in about a second.
+- **Two more leak-scan blind spots closed — both of them unfixable after the fact**: ① the **historical content of deleted files** (a clean working tree tells you nothing; the blobs are still in the object store) and ② **strings inside binaries**. The new `Scripts/scan-history-blobs.sh` walks `git cat-file --batch-all-objects` (broader than `rev-list --all`: it also covers **dangling** objects, which would still be pushed), and is wired into step 6 of `publish.sh`. The leak scan is now **three channels**.
+- **The graceful-quit path is now verified on this machine** (`Scripts/probe-graceful-exit.sh`). Sending ⌘Q from outside goes through Apple Events, and that authorization is invalidated in TCC after ad-hoc re-signing (measured `-10004`), so the only evidence used to be "a hard kill is detected as a crash" — which is the **opposite** direction from "a graceful quit closes the session". A new `DemoDriver` scene (`demo-quit`) now sends `terminate:` through the **responder chain** (the same path the "Quit Unroll" menu item uses, character for character), and the script asserts the on-disk effect (`alive=false` in `session.json`, with `appTerminated` as the last breadcrumb). A `MODE=abnormal` control run proves those two assertions **do go red**.
+- Measured: the Debug `demo-quit` run passes both disk assertions, and the `MODE=abnormal` (hard kill) run fails both. The whole build chain was also re-run into `/tmp` (rc=0), confirming both extracted guards fire inside a real build.
+- ⚠️ Still not covered: **whether closing the window really quits the app**. The app does **not** implement `applicationShouldTerminateAfterLastWindowClosed`, and AppKit's default for that optional method is `false` — so closing the last window does **not** quit, which makes the "⌘Q / close window" wording in `UnrollApp.swift` questionable in its second half (logged in `docs/测试与验证.md` §22.6).
+- The unit-test **count is unchanged** (337 cases / 335 passed / 2 skipped / 0 failed) — everything added in this batch is shell-level reverse testing.
+
 ## 1.2.0 — 2026-09-23 · 首次公开发布 / First public release
 
 > **本版是实际对外公开的第一个版本。** `v1.0.0` / `v1.0.1` / `v1.1.0` 三个标签都只在本机打过、**从未推送过**（仓库此前没有远程）；其中 1.1.0 曾在本机构建并冻结过产物。本版在那一版之上补了下面这组**可发现性**改动；功能不变的部分见下面各段。

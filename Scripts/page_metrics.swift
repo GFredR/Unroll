@@ -54,11 +54,15 @@ func lum(_ x: Int, _ y: Int) -> Int {
     return (Int(buf[o]) * 299 + Int(buf[o + 1]) * 587 + Int(buf[o + 2]) * 114) / 1000
 }
 
-/// 该行亮像素(画面内容)的采样计数(每 2 像素取一个)。窗口背景近黑,页内容明显亮
-func brightCount(_ y: Int) -> Int {
+/// 该行亮像素(画面内容)的采样计数(每 2 像素取一个)。窗口背景近黑,页内容明显亮。
+///
+/// `from`/`to` 划出**内容区**。2026-09-23 起阅读层左侧多了一条缩略图栏(112pt),
+/// 栏里的缩略图同样亮 —— 全宽扫描会把**栏**认成第一页(实测:blockHeight 报到
+/// 1223 设备行,那正是「全部页面」按钮 + 5 格缩略图的高度,而真页面只有 ~644)
+func brightCount(_ y: Int, from: Int, to: Int) -> Int {
     var n = 0
-    var x = 0
-    while x < w {
+    var x = from
+    while x < to {
         if lum(x, y) > 60 { n += 1 }
         x += 2
     }
@@ -72,11 +76,12 @@ func columnHasContent(_ x: Int, rows: Range<Int>) -> Bool {
 }
 
 /// 该行里「近黑」像素的采样计数 —— 用来认出页脚进度条那一行。
-/// 进度条 = 黑底 + 白段,整行九成以上是黑的;页面自身的正常行几乎没有黑像素
-func darkCount(_ y: Int) -> Int {
+/// 进度条 = 黑底 + 白段,整行九成以上是黑的;页面自身的正常行几乎没有黑像素。
+/// 同样划内容区(理由见 `brightCount`)
+func darkCount(_ y: Int, from: Int, to: Int) -> Int {
     var n = 0
-    var x = 0
-    while x < w {
+    var x = from
+    while x < to {
         if lum(x, y) < 30 { n += 1 }
         x += 2
     }
@@ -88,8 +93,8 @@ func darkCount(_ y: Int) -> Int {
 /// 不能用「从 x=0 起连续 ≥200 的亮段」:样本页自身的浅色噪点亮度就能到 ~210,
 /// 白点还会连成串 —— 实测那样量出来是 236(整段图案),而真实白段只有 104。
 /// 白段与黑底之间是 253 → 0 的硬跳变,所以找「从亮到黑的第一处跳变」才稳
-func barWhiteEdge(row y: Int) -> Int {
-    var x = 0
+func barWhiteEdge(row y: Int, from: Int) -> Int {
+    var x = from
     while x < w - 4 {
         if lum(x, y) < 50, lum(x + 1, y) < 50, lum(x + 2, y) < 50, lum(x + 3, y) < 50 {
             return x
@@ -99,10 +104,12 @@ func barWhiteEdge(row y: Int) -> Int {
     return 0
 }
 
-let counts = (0..<h).map(brightCount)
+// 第一遍是**全宽粗扫**,只为拿到「页面中段的行」—— 它是后面定内容区左右缘的
+// 依据。真正用于判定的数全部来自第二遍(只在内容区内)的扫描
+let roughCounts = (0..<h).map { brightCount($0, from: 0, to: w) }
 // 松判据:有 3 个亮采样就算「这一行有内容」。**必须松** —— 页脚进度条那几行
 // 绝大多数像素是黑的(只有白段那一小截亮),严判据会把它们切出页外
-let loose = counts.map { $0 >= 3 }
+let roughLoose = roughCounts.map { $0 >= 3 }
 
 /// 连续内容段。允许中间断 1 行(噪点图案可能整行偏暗)。
 /// **尾部那几行空行要裁掉**:判定收尾时 miss 已经累到 3,`y` 指的是第 3 个空行,
@@ -136,23 +143,58 @@ func runs(_ flags: [Bool]) -> [Range<Int>] {
 // (试过用「段内最亮那行 ≥ w/4 个亮采样」:实测标题栏那段也能过,因为它自己那一行
 //  会被整段的最亮行代表。判据选了会随内容变的量,就会自己失效。)
 let pageMinRows = 120
-let candidates = runs(loose).filter { $0.count >= pageMinRows }
-
-guard let page1 = candidates.first else {
+guard let roughPage1 = runs(roughLoose).filter({ $0.count >= pageMinRows }).first else {
     FileHandle.standardError.write(Data("整张图没找到页面(只有标题栏?)\n".utf8))
     exit(1)
 }
-let page2 = candidates.count > 1 ? candidates[1] : nil
-let gap: Range<Int>? = page2.map { page1.upperBound..<$0.lowerBound }
 
-// 内容区右边界:拿页面中段的行去扫(避开页脚进度条那几行 —— 那里左侧是白的、
-// 右侧是黑的,会把边界认到白段上)
-let midRows = (page1.lowerBound + page1.count / 4)..<(page1.upperBound - page1.count / 4)
+// 内容区右缘:拿页面中段的行去扫(避开页脚进度条那几行 —— 那里左侧是白的、
+// 右侧是黑的,会把边界认到白段上)。**从右往左找,所以不受左栏影响**:栏在左边
+//
+// ⚠️ `..<` 不能写在换行开头 —— Swift 会把它解析成**前缀运算符**,
+// 报 "result of operator '..<' is unused"(2026-09-23 实测,写成分步就没这问题)
+let midTop = roughPage1.lowerBound + roughPage1.count / 4
+let midBottom = roughPage1.upperBound - roughPage1.count / 4
+let midRows = midTop..<midBottom
 var colRight = 0
 for x in stride(from: w - 1, through: 0, by: -1) where columnHasContent(x, rows: midRows) {
     colRight = x + 1
     break
 }
+
+// 内容区左缘(2026-09-23 新增:阅读层多了一条左侧缩略图栏,栏里的缩略图也亮)。
+// 从 `colRight` 往左扫,**连续 `gapMin` 列都没有内容**的第一段就是「栏与页面
+// 之间的缝」,缝的右缘即页面左缘。
+//
+// 为什么必须「连续 N 列」而不是「一列」:真实漫画里整块全黑的页边很常见,
+// 按单列判会把左缘认到**页面内部**去 —— 内容区算窄了,判据反而变松。
+// 那正是「守卫失效的第二种形态」:不报错,只是把正常状态说成故障。
+// 而缝是**两个独立视图之间**的空隙(栏有内边距、页面自身也有留白),必然连续。
+//
+// 找不到缝时 `colLeft` 保持 0 —— 旧的无栏布局下这一整段与改动前完全等价
+let gapMin = 4
+var colLeft = 0
+var blank = 0
+for x in stride(from: colRight - 1, through: 0, by: -1) {
+    if columnHasContent(x, rows: midRows) {
+        blank = 0
+    } else {
+        blank += 1
+        if blank >= gapMin { colLeft = x + blank; break }
+    }
+}
+
+// ---- 第二遍:只在内容区 [colLeft, colRight) 内扫,判定用的数都出在这一遍 ----
+let counts = (0..<h).map { brightCount($0, from: colLeft, to: colRight) }
+let loose = counts.map { $0 >= 3 }
+let candidates = runs(loose).filter { $0.count >= pageMinRows }
+
+guard let page1 = candidates.first else {
+    FileHandle.standardError.write(Data("内容区里没找到页面(左缘可能算错了)\n".utf8))
+    exit(1)
+}
+let page2 = candidates.count > 1 ? candidates[1] : nil
+let gap: Range<Int>? = page2.map { page1.upperBound..<$0.lowerBound }
 
 // 页脚进度条:在页尾若干行里认出**黑像素最多、且左端是亮的**那一行。
 //
@@ -161,10 +203,16 @@ for x in stride(from: w - 1, through: 0, by: -1) where columnHasContent(x, rows:
 // 所以左端必然是亮的。页尾那几行里只有进度条同时满足这两条
 let barScan = Array(max(page1.lowerBound, page1.upperBound - 24)..<page1.upperBound)
 let barRow = barScan
-    .filter { lum(0, $0) >= 200 }
-    .max { darkCount($0) < darkCount($1) }
-let barWhiteRight = (barRow.map { darkCount($0) >= w / 4 } ?? false)
-    ? barWhiteEdge(row: barRow!) : 0
+    // 白段紧贴**页左缘**,所以起点是 `colLeft` 而不是 0(无栏时 colLeft 就是 0,
+    // 这一处与改动前等价)。仍写 0 的话,左栏一出现就读到栏底,永远不满 200 ——
+    // barRow 变 nil、白段量成 0,判据当场**假红**(2026-09-23 实测就是这条)
+    .filter { lum(colLeft, $0) >= 200 }
+    .max { darkCount($0, from: colLeft, to: colRight)
+           < darkCount($1, from: colLeft, to: colRight) }
+let barWhiteRight = (barRow.map {
+        darkCount($0, from: colLeft, to: colRight) >= max((colRight - colLeft) / 4, 1)
+    } ?? false)
+    ? barWhiteEdge(row: barRow!, from: colLeft) : 0
 
 func fmt(_ r: Range<Int>?) -> String {
     guard let r else { return "none" }
@@ -175,7 +223,12 @@ print("win=\(w)x\(h)")
 print("page1=\(fmt(page1))")
 print("gap=\(fmt(gap))")
 print("page2=\(fmt(page2))")
+print("colLeft=\(colLeft)")
 print("colRight=\(colRight)")
 print("barWhiteRight=\(barWhiteRight)")
 print("blockHeight=\(page1.count)")
 print("scrollerStrip=\(w - colRight)")
+// 内容区实宽 —— 判据要用的是**这个**,不是 colRight。
+// 2026-09-23 之前内容区确实从 0 起,两者相等;左侧栏出现之后不再相等,
+// 拿 colRight 当宽度会把页面算宽 ~224 设备px,判据当场假红
+print("contentWidth=\(colRight - colLeft)")

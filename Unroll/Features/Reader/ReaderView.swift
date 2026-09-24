@@ -55,14 +55,29 @@ struct ReaderView: View {
             case .failed(let failure):
                 FailureView(failure: failure, onOpen: { viewModel.open(url: $0) })
             case .reading:
-                // 首次阅读提示条(2026-09-22)是**布局里的一行**,不是浮层 ——
-                // 画布于是拿到扣掉这条之后的高度,页面一条边都不会被压住
-                VStack(spacing: 0) {
-                    if viewModel.isHintBarVisible {
-                        ReaderHintBar(onShowAll: onShowShortcuts,
-                                      onDismiss: { viewModel.dismissHintBar() })
+                // 两层结构(2026-09-23):打开归档后落在**网格层**(浏览全卷),
+                // 点一格进阅读层,阅读层的「浏览」/ Esc 回网格层。
+                //
+                // 两层**互斥渲染**,这一点是刻意的好处:`ReaderCanvas` 的键盘与滚轮
+                // 监视器挂在它的 `onAppear` 上,画布不在屏上时监视器根本不安装 ——
+                // 于是原先那套「面板开着就让位」的标志判断可以整片删掉
+                if viewModel.layer == .browse {
+                    PageGridView(viewModel: viewModel)
+                } else {
+                    // 首次阅读提示条(2026-09-22)是**布局里的一行**,不是浮层 ——
+                    // 画布于是拿到扣掉这条之后的高度,页面一条边都不会被压住
+                    //
+                    // ⚠️ 它只挂在**阅读层**(2026-09-23):它讲的是画布手势
+                    // (点左右半屏 / 滚轮 / 双击缩放),而这些手势在网格层**不存在**。
+                    // 挂到网格上等于教一套当场用不上的操作 —— 而它讲的时机反而更准了:
+                    // 打开即网格 ⇒ 这条提示首次出现是在用户**第一次点进大图**时
+                    VStack(spacing: 0) {
+                        if viewModel.isHintBarVisible {
+                            ReaderHintBar(onShowAll: onShowShortcuts,
+                                          onDismiss: { viewModel.dismissHintBar() })
+                        }
+                        ReaderCanvas(viewModel: viewModel)
                     }
-                    ReaderCanvas(viewModel: viewModel)
                 }
             }
         }
@@ -98,14 +113,10 @@ struct ReaderView: View {
                                     set: { if !$0 { viewModel.dismissIntegrity() } })) {
             IntegritySheet(viewModel: viewModel)
         }
-        // 缩略图网格(v1.1,⇧⌘G)。同样用自定义 Binding:用户按 Esc / 点外面关掉时,
-        // SwiftUI 只会把标志置 false —— 那样**生成任务会一直跑下去**,
-        // 而界面已经看不见它了(白烧 CPU 又占着磁盘)。统一交给 dismissGrid(),
-        // 它顺带停任务
-        .sheet(isPresented: Binding(get: { viewModel.isGridSheetPresented },
-                                    set: { if !$0 { viewModel.dismissGrid() } })) {
-            PageGridSheet(viewModel: viewModel)
-        }
+        // 缩略图网格**不再是 sheet**(2026-09-23)。它现在是 `.reading` 分支里的
+        // 另一个层(见上面 `viewModel.layer` 那一段)。原先这里那套自定义 Binding
+        // 的动机也随之消失:当时要靠 `dismissGrid()` 在面板被系统关掉时停掉生成
+        // 任务,而"层"与画布是互斥渲染的,不存在"看不见却还在跑"的面板
         // 导出本卷页文件(⇧⌘E,2026-09-21)。同样用自定义 Binding —— 用户按 Esc /
         // 点外面关掉时,SwiftUI 只把标志置 false,那样**导出会在后台接着跑到完**,
         // 而界面已经看不见它了(白烧 CPU、还在往磁盘里写)。统一交给 dismissExport()
@@ -133,7 +144,8 @@ private struct EmptyStateView: View {
 
     var body: some View {
         // 2026-09-22:间距由 lg(32) 收到 md(16) —— 空态多了小抄与最近打开两段,
-        // 纵向总高必须收在窗口最小高度 480 以内(算法见 RecentPresentation.visibleLimit)
+        // 纵向总高必须收在窗口最小高度以内(算法见 RecentPresentation.visibleLimit;
+        // 该上限 2026-09-23 之后不再由窗口高度推导,理由见那里的注释)
         VStack(spacing: DesignSystem.Spacing.md) {
             appIcon
                 .shadow(color: .black.opacity(0.55), radius: 14, x: 0, y: 6)
@@ -343,6 +355,25 @@ private struct ReaderCanvas: View {
     @State private var hudVisible = false
     @State private var hudHideTask: Task<Void, Never>?
 
+    /// 当前有几件周边控件被鼠标悬停着(左栏与左右箭头各自上报)。
+    ///
+    /// **计数器而不是布尔**:鼠标从箭头快速滑到左栏时,两个 `onHover` 回调的
+    /// 到达顺序不保证 —— 用布尔会让"新的 true"被"旧的 false"覆盖,于是
+    /// chrome 在鼠标明明停着的时候暗下去。计数天然免疫顺序(下限夹在 0)
+    @State private var chromeHoverCount = 0
+
+    /// 周边控件(左栏 + 翻页箭头)的透明度。**鼠标静默时淡化,不是消失** ——
+    /// 这是用户 2026-09-23 的原话("鼠标不在,可以淡化显示")。
+    /// `hudVisible` 覆盖了"鼠标刚在窗口里动过"(2.5s 内);`chromeHoverCount > 0`
+    /// 补上"鼠标正停在某件控件上"这一种 —— 否则用户瞄准一个按钮的过程中它自己暗下去
+    private var chromeOpacity: Double {
+        (hudVisible || chromeHoverCount > 0) ? 1 : DesignSystem.Chrome.idleOpacity
+    }
+
+    private func bumpChromeHover(_ inside: Bool) {
+        chromeHoverCount = inside ? chromeHoverCount + 1 : max(0, chromeHoverCount - 1)
+    }
+
     /// 连续滚动模式(2026-09-21)。画布在这一模式下整体换渲染路径,
     /// 并把缩放 / 平移 / 半屏点击那一整套手势让出去
     private var scrollMode: Bool { viewModel.layout == .scroll }
@@ -351,6 +382,44 @@ private struct ReaderCanvas: View {
     private var gestureMask: GestureMask { scrollMode ? .none : .all }
 
     var body: some View {
+        HStack(spacing: 0) {
+            // 左侧缩略图栏(2026-09-23)。**在布局里占位,不是浮层** ——
+            // 于是画布的 GeometryReader 拿到的宽度天然扣掉了栏宽,
+            // 那套「左右半屏点击」的分区不用任何额外换算
+            // (反过来说:哪天把它改成 overlay,半屏分界线就会失准)
+            ThumbnailRail(viewModel: viewModel,
+                          onActivity: pokeHUD,
+                          onHoverChange: bumpChromeHover)
+                .opacity(chromeOpacity)
+
+            canvasArea
+        }
+        .onChange(of: viewModel.pageIndex) { _, _ in
+            // 翻页即回到适配视图:缩放状态不属于「这一页」,属于「这次阅读会话」
+            zoom = 1
+            offset = .zero
+        }
+        .onChange(of: viewModel.fitMode) { _, _ in
+            // 换档位 = 换渲染基准:自由缩放系数与平移一并归零(档位本身保留)
+            zoom = 1
+            offset = .zero
+        }
+        .onAppear {
+            installKeyMonitor()
+            installScrollMonitor()
+        }
+        .onDisappear {
+            removeKeyMonitor()
+            removeScrollMonitor()
+        }
+    }
+
+    // MARK: 画布主体
+
+    /// 画布主体。抽成独立属性是为了让 `body` 成为「左栏 + 画布」的 HStack ——
+    /// 那几个 `onChange` / `onAppear` 随之挂到 HStack 上:换页时左栏要跟着滚,
+    /// 它们本来就该是**这一整层**的事,而不是画布自己的事
+    private var canvasArea: some View {
         GeometryReader { proxy in
             ZStack {
                 DesignSystem.Palette.canvas.ignoresSafeArea()
@@ -372,7 +441,21 @@ private struct ReaderCanvas: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                HUDView(viewModel: viewModel, visible: hudVisible, onActivity: pokeHUD)
+                // 左右翻页箭头(2026-09-23)。**滚动模式下不出现** ——
+                // 那里没有"摊"这个概念,翻页是滚动,箭头会变成两个名不副实的控件
+                // (与菜单里四个缩放档位在滚动模式下灰掉同一个判断)
+                if !scrollMode {
+                    PageArrows(viewModel: viewModel, onHoverChange: bumpChromeHover)
+                        .opacity(chromeOpacity)
+                        // 鼠标静默时退出命中测试:箭头压在画布边缘,而那片区域的
+                        // 左右半屏点击本来就是翻页 —— 让箭头让位,主路径一点不受影响
+                        .allowsHitTesting(hudVisible)
+                }
+
+                // 「浏览」→ 回网格层(2026-09-23)。`showGrid()` 已有结果就直接显示、
+                // 否则开始生成;返回值是生成任务,视图不需要它
+                HUDView(viewModel: viewModel, visible: hudVisible, onActivity: pokeHUD,
+                        onBrowse: { _ = viewModel.showGrid() })
             }
             .contentShape(Rectangle())   // 点击区覆盖整个画布(含黑边)
             // 鼠标/触控板移动 → HUD 立现(onContinuousHover 只在移动时触发)
@@ -388,24 +471,6 @@ private struct ReaderCanvas: View {
             // 平移:放大后;或档位本身可能溢出窗口(适应宽/适应高/1:1)时也放行
             .gesture(zoom > 1 || viewModel.fitMode != .fitWindow ? drag : nil,
                      including: gestureMask)
-        }
-        .onChange(of: viewModel.pageIndex) { _, _ in
-            // 翻页即回到适配视图:缩放状态不属于「这一页」,属于「这次阅读会话」
-            zoom = 1
-            offset = .zero
-        }
-        .onChange(of: viewModel.fitMode) { _, _ in
-            // 换档位 = 换渲染基准:自由缩放系数与平移一并归零(档位本身保留)
-            zoom = 1
-            offset = .zero
-        }
-        .onAppear {
-            installKeyMonitor()
-            installScrollMonitor()
-        }
-        .onDisappear {
-            removeKeyMonitor()
-            removeScrollMonitor()
         }
     }
 
@@ -549,11 +614,10 @@ private struct ReaderCanvas: View {
     private func installKeyMonitor() {
         guard keyMonitor == nil else { return }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // 面板(页码跳转 / 缩略图网格)打开时让位:空格/方向键必须能正常进输入框,
-            // 也必须能用来滚网格 —— 少了网格这一项,按空格会在**网格底下**翻页,
-            // 用户看到的是"网格里空格键没反应,关掉发现在别处翻了好几页"
-            guard !viewModel.isJumpSheetPresented,
-                  !viewModel.isGridSheetPresented else { return event }
+            // 页码跳转面板打开时让位:空格/方向键必须能正常进输入框。
+            // ⚠️ 2026-09-23 起这里不再判「网格面板」—— 网格已经是**另一个层**,
+            // 它与画布互斥渲染,画布不在屏上时本监视器压根没安装
+            guard !viewModel.isJumpSheetPresented else { return event }
             // 带修饰键的按键(⌘O / ⌘W / 快捷键系统)一律放行,绝不拦截
             guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty else {
                 return event
@@ -606,14 +670,26 @@ private struct ReaderCanvas: View {
     private func installScrollMonitor() {
         guard scrollMonitor == nil else { return }
         scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            // 面板打开时让位(滚轮不翻页)。**网格这一项尤其重要**:
-            // 网格是靠滚轮浏览的,不拦截的话滚一下既滚了网格又翻了底下的页
-            guard !viewModel.isJumpSheetPresented,
-                  !viewModel.isGridSheetPresented else { return event }
+            // 页码跳转面板打开时让位(滚轮不翻页)。
+            // ⚠️ 2026-09-23 起不再判「网格面板」:网格是独立的层,它显示时本监视器
+            // 根本没安装。原先那条判断的理由是"滚一下既滚了网格又翻了底下的页",
+            // 而那个「底下」现在不存在了
+            guard !viewModel.isJumpSheetPresented else { return event }
             // **滚动模式必须整个让位**(2026-09-21)。不拦的话滚一下会同时
             // 「滚了列表」和「翻了一页」—— 这是"模式切了但滚轮还留在旧逻辑"
             // 最直观的坏法,而且看起来像滚动本身卡了
             guard !scrollMode else { return event }
+            // **鼠标在左侧缩略图栏上时让位**(2026-09-23)。不加这一条,在栏里滚
+            // 一下会**同时**滚栏和翻页 —— 与上面"滚动模式让位"是同一种坏法。
+            //
+            // 判据用窗口坐标而不是悬停状态,理由是闭包时序:`NSEvent` 监视器是
+            // escaping closure,在 `onAppear` 那一刻捕获 `ReaderCanvas` 的**值拷贝**,
+            // `@State` 在其中的读取时效性 SwiftUI 并不保证 —— 而窗口坐标是事件
+            // 自带的,不需要任何共享状态。AppKit 窗口坐标原点在左下角,x 从左往右增
+            //
+            // ⚠️ 与 `Chrome.railWidth` 是**硬耦合**:左栏必须贴窗口左缘,且宽度
+            // 取自同一个 token。两处各写一个数字就会悄悄错位(改栏宽时只改一处)
+            guard event.locationInWindow.x >= DesignSystem.Chrome.railWidth else { return event }
             guard zoom * pinchScale <= 1 else { return event }
             let now = Date()
             guard now.timeIntervalSince(lastWheelPageAt) > 0.3 else { return event }

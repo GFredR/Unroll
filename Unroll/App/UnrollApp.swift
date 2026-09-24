@@ -48,7 +48,14 @@ struct UnrollApp: App {
                        // 提示条里的「全部快捷键…」与菜单里那一项开的是同一个面板:
                        // 一个状态、一处渲染,不给它第二条渲染路径
                        onShowShortcuts: { isShortcutSheetPresented = true })
-                .frame(minWidth: 720, minHeight: 480)
+                // 窗口尺寸(2026-09-23 用户要求"整体加大三分之一")。
+                // 原先这里**只有下限**,默认尺寸由内容推导 —— 而空态内容并不高,
+                // 于是开出来的初始窗口偏小。
+                //
+                // 具体数字与它们的来由搬到了 `DesignSystem.Window`(常量集中、
+                // 且那条「最小窗口够不够放下左栏」的判断现在能被测试断言)
+                .frame(minWidth: DesignSystem.Window.minWidth,
+                       minHeight: DesignSystem.Window.minHeight)
                 // 帮助 → 键盘快捷键…(2026-09-22)。挂在根视图上:它是 App 级面板,
                 // 与阅读态 / 空态无关 —— 任何阶段都该能翻快捷键
                 .sheet(isPresented: $isShortcutSheetPresented) {
@@ -81,6 +88,22 @@ struct UnrollApp: App {
                     Text(L10n.tr("app.alert.recentMissing.message", missingRecentName ?? ""))
                 }
         }
+        // 初始窗口 960×640 = 原最小尺寸 720×480 各乘 4/3(用户 2026-09-23 要求)。
+        // `defaultSize` 是 **Scene** 的修饰符,不是 View 的 —— 写在 ReaderView 上会
+        // 被静默忽略(它只作用在窗口内容,不影响 NSWindow 起手尺寸)。
+        // 数字见 `DesignSystem.Window`(唯一来源)
+        //
+        // ⚠️ 窗口几何被记忆:已经存过 frame 的机器**看不到这里的默认值生效**
+        // (系统直接恢复旧 frame)—— 这是本批唯一一个"改完可能看不出变化"的点。
+        //
+        // ⚠️ 2026-09-23 同日更正:上一句原先写的是"删掉 UserDefaults 里的
+        // `NSWindow Frame UnrollMainWindow` 即可" —— **那个键从未存在过**
+        // (清空记忆后逐键检查容器 plist:计数 0)。真正在记的是 **SwiftUI 自己
+        // 派生的 `NSWindow Frame SwiftUI.…` 键**,而它按"视图修饰符链"派生,
+        // 链一变就换键。所以"想回到新默认值"的正确做法是**整体删掉该 App 的
+        // UserDefaults 域**,而不是去找一个具体键名(见 WindowChrome 的文档注释)
+        .defaultSize(width: DesignSystem.Window.defaultWidth,
+                     height: DesignSystem.Window.defaultHeight)
         .windowStyle(.automatic)
         .commands {
             // 替换「新建」组:漫画阅读器没有「新建」,只留「打开」
@@ -383,9 +406,20 @@ struct UnrollApp: App {
 
 // MARK: - 窗口外观:尺寸记忆 + 标题(v2,2026-09-15 / 2026-09-16)
 
-/// 借 AppKit 的 frameAutosaveName 实现零自管存储:
-/// NSWindow 自动把 frame 写进 UserDefaults(`NSWindow Frame …`),启动时自动恢复。
+/// 窗口尺寸/位置记忆**由 SwiftUI 自己的窗口恢复机制提供**:`WindowGroup` 会按
+/// 视图修饰符链派生一个 `NSWindow Frame SwiftUI.…` 键,启动时自动恢复。
 /// 隐私上只有窗口几何数据,无任何文档信息。
+///
+/// ⚠️ **2026-09-23 更正一处过度声称**。这里原先调
+/// `window?.setFrameAutosaveName("UnrollMainWindow")`,注释写的是"借 AppKit 的
+/// frameAutosaveName 实现零自管存储"。实测(清空记忆后逐键检查容器 plist):
+/// **`NSWindow Frame UnrollMainWindow` 这个键从未出现过**。记忆功能一直是好的,
+/// 好的是另一条路 —— SwiftUI 那条。所以 `viewDidMoveToWindow` 里那行
+/// **不要再被当作记忆的实现**来读。
+///
+/// 这个更正有一个直接后果:`UnrollApp` 的 `.defaultSize` **只在没有任何记忆时
+/// 生效**,而记忆键是"视图修饰符链"派生的 —— 链一变就换键,等于自动重置。
+/// 老用户看到的是记忆值。这不是 bug,是记忆在工作
 ///
 /// 2026-09-16 顺带接管标题(`文件名 · P.3/200`):`WindowGroup("app.name")` 的标题是
 /// 静态的,而 Window 菜单 / Dock 悬停 / 多窗口辨认都需要**动态**页码。

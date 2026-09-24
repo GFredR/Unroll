@@ -8,11 +8,14 @@
 //
 // 触发:标记文件(**用文件名区分场景**),放在容器 tmp/
 //   demo-enabled  → 翻页演示(录 GIF 用,时间轴与 2026-09 完全一致)
-//   demo-grid     → 缩略图网格面板(⇧⌘G)取证
+//   demo-grid     → 缩略图网格**层**(⇧⌘G)取证
 //   demo-jump     → 页码跳转面板 + 侧边预览(⌥⌘G)取证
 //   demo-scroll   → 连续滚动(⌘0)取证(下行 + 回程,见 runScroll 的判据说明)
 //   demo-export   → 导出本卷页文件(⇧⌘E)面板取证(真导一遍,见 runExport 的判据说明)
 //   demo-hint     → 首次阅读提示条取证(见 runHint 的判据说明)
+//   demo-chrome   → 阅读层周边控件(左栏 / 翻页箭头)取证(见 runChrome 的判据说明)
+//   demo-quit     → **优雅退出**链路取证(见 runQuit 的判据说明)。⚠️ 它会真的把
+//                   App 退掉,所以没有截图 —— 判据在磁盘上,用 Scripts/probe-graceful-exit.sh 跑
 //
 // 为什么用标记文件而不是 argv:`open --args` 在 macOS 15 上实测**传不进 App**
 // (LaunchServices 会过滤未知 argv;2026-09-20 用探针 App 复核 —— 经 `open`
@@ -20,7 +23,7 @@
 // 环境变量 UNROLL_DEMO_SCRIPT 仍作兜底(值 grid/jump 选场景,其它非空值 = 翻页)。
 //
 // 录制脚本见 Scripts/record-demo.sh;
-// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll / ONLY=export / ONLY=hint)。
+// UI 取证见 Scripts/verify-ui.sh(ONLY=grid / ONLY=jump / ONLY=scroll / ONLY=export / ONLY=hint / ONLY=chrome)。
 // 不需要演示时:直接删掉本文件 + UnrollApp.swift 里那一处 #if DEBUG 调用即可。
 //
 // 调试:每个节点写一行到容器 tmp/demo-driver.log
@@ -55,6 +58,13 @@ enum DemoDriver {
         /// 首次阅读提示条(2026-09-22)。**它自己只出现一次**,所以这个场景
         /// 靠 `showHintBar()` 显式调出来 —— 与菜单里那一项走的是同一个方法
         case hint = "demo-hint"
+        /// 阅读层周边控件(左侧缩略图栏 + 左右翻页箭头,2026-09-23)
+        case chrome = "demo-chrome"
+        /// **优雅退出**(2026-09-24)。它是唯一一个会真的结束进程的场景,
+        /// 因此不能进 verify-ui.sh(那套流程要等一张截图,而这里没有窗口可拍)——
+        /// 判据落在容器里的 `session.json` 与 `breadcrumbs.log` 上,
+        /// 由 Scripts/probe-graceful-exit.sh 检查
+        case quit = "demo-quit"
 
         /// 认全名(`demo-grid`)与简写(`grid`)。**认不出返回 nil**,由调用方决定
         /// 兜底 —— 环境变量那条路的旧语义是「随便给个非空值就翻页」,
@@ -66,6 +76,8 @@ enum DemoDriver {
             case Scene.scroll.rawValue, "scroll": return .scroll
             case Scene.export.rawValue, "export": return .export
             case Scene.hint.rawValue, "hint": return .hint
+            case Scene.chrome.rawValue, "chrome": return .chrome
+            case Scene.quit.rawValue, "quit": return .quit
             default: return nil
             }
         }
@@ -88,7 +100,9 @@ enum DemoDriver {
         // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
         guard !UnrollRuntime.isTesting else { return nil }
 
-        for scene in [Scene.grid, .jump, .scroll, .export, .hint, .paging]
+        // ⚠️ `.quit` 排在最前:它会结束进程,若某个旧标记没清干净而它排在后头,
+        //    就等于"取证跑完了却没验退出"。其余顺序沿用历史行为。
+        for scene in [Scene.quit, .grid, .jump, .scroll, .export, .hint, .chrome, .paging]
         where FileManager.default.fileExists(atPath: flagURL(for: scene).path) {
             return scene
         }
@@ -133,6 +147,15 @@ enum DemoDriver {
     }
 
     private static func waitForDocument(scene: Scene, on vm: ReaderViewModel) async {
+        // 退出场景**不等文档**:要验的是"退出那一刻的收尾",它与有没有打开归档无关。
+        // 硬等一个文档只会把一个能跑的取证变成"样本没送到就什么都不做" —— 而
+        // "什么都没做"在这类脚本里的表现是超时,看起来像退出链路坏了,实际不是。
+        if scene == .quit {
+            log("scene=\(scene.rawValue) 跳过等文档(退出链路与是否打开归档无关)")
+            await runQuit()
+            return
+        }
+
         // 最多等 30s 让外部 `open <file>` 把文档送进来
         var ticks = 0
         while vm.pageCount == 0 && ticks < 300 {
@@ -163,6 +186,14 @@ enum DemoDriver {
         case .hint:
             await prepareForProbe(on: vm)
             await runHint(on: vm)
+        case .chrome:
+            await prepareForProbe(on: vm)
+            await runChrome(on: vm)
+        case .quit:
+            // 正常情况下到不了这里(上面已提前 return);留着是为了让 switch 保持
+            // 穷尽 —— 少一个 case 编译不过,这是**好事**:以后加场景时会当场被提醒,
+            // 而不是静默走不到。
+            await runQuit()
         }
     }
 
@@ -194,6 +225,11 @@ enum DemoDriver {
     /// (`-ss 5.8` 取跨页、`-ss 2.0` 取单页),改了就得同步改脚本。
     private static func runPaging(on vm: ReaderViewModel) async {
         log("run start")
+        // 2026-09-23 起文档打开后停在**网格层**。这条时间轴录的是"翻页"这件事,
+        // 所以先切进阅读层 —— 否则 GIF 的开头会是一张网格。
+        // ⚠️ 想让 GIF 反而**展示**"打开 → 网格 → 点进大图"这条新主链的话,
+        // 要重排时间轴并同步改 record-demo.sh 的抽帧点,那是另一件事(未做)
+        vm.showReader()
         // 从上一次录制的续读状态复位(样本可能被读过,续读会把人带到中间页)
         vm.layout = .single
         vm.direction = .leftToRight
@@ -228,26 +264,40 @@ enum DemoDriver {
 
     // MARK: - 取证场景(网格 / 跳转面板)
 
-    /// 两个取证场景的公共准备:把可能被**续读**带偏的状态压回可预期的起点。
-    /// 不复位的话,同一份样本第二次跑会因为进度记忆停在上次的页上,
-    /// 截出来的图每次都不同 —— 取证最忌讳"看起来一样其实不一样"
+    /// 取证场景的公共准备。两件事:
+    ///
+    /// ① 把可能被**续读**带偏的状态压回可预期的起点。不复位的话,同一份样本
+    ///    第二次跑会因为进度记忆停在上次的页上,截出来的图每次都不同 ——
+    ///    取证最忌讳"看起来一样其实不一样";
+    ///
+    /// ② **切到阅读层**(2026-09-23 加「打开即网格」时补)。文档一就绪,界面停在
+    ///    **网格层**;而调本方法的这几个场景(grid 之外)验的都是**画布**上的东西。
+    ///    不切层的话每张截图拍到的都是网格 —— 而状态行仍然是对的,于是
+    ///    「截图证观感」这一半**静默失效**(与 §11.9 那条"守卫的第二种失效"同型:
+    ///    把正常状态说成故障只是其中一种,这里是把失效说成正常)
     private static func prepareForProbe(on vm: ReaderViewModel) async {
         vm.layout = .single
         vm.direction = .leftToRight
         vm.fitMode = .fitWindow
+        vm.showReader()
         try? await Task.sleep(for: .milliseconds(600))
     }
 
-    /// 场景:缩略图网格(⇧⌘G)。
+    /// 场景:缩略图网格层(⇧⌘G)。
     ///
     /// 停在**第二页**而不是封面:当前页在网格里有一圈品牌色描边,
     /// 停在第 1 页的话那圈描边落在左上角第一格,不容易看出"它在跟页码走"。
+    /// (2026-09-23 起还多一层:网格会自动滚到当前页,而第 1 页恰好就是初始位置,
+    /// 于是"自动定位"这件事在封面页上根本看不出来)
     private static func runGrid(on vm: ReaderViewModel) async {
         vm.goTo(min(1, max(vm.pageCount - 1, 0)))
         try? await Task.sleep(for: .milliseconds(900))
 
+        // ⚠️ 打开即网格之后网格**本来就是默认层**(`prepareForProbe` 刚切到阅读层,
+        // 这里再切回来)。这一步仍然要显式调 —— 它走的正是「阅读层按浏览回来」
+        // 那条路径,顺带把那条路径也覆盖进取证
         vm.showGrid()
-        log("scene=grid sheet=opened")
+        log("scene=grid layer=browse")
 
         // 等生成**真正结束**。面板上的进度条在生成中是个中间值,
         // 拿它当截图依据会拍到半成品 —— 而半成品恰好是"看起来没问题"的假证据
@@ -324,6 +374,9 @@ enum DemoDriver {
     /// 「向上滚动」那条路 —— solid 7z 上后向访问会让顺序扫描器重开(O(已读页数)),
     /// 一趟回程就能把「有没有退化到卡死」直接暴露出来
     private static func runScroll(on vm: ReaderViewModel) async {
+        // 本场景不调 `prepareForProbe`(它自己设 layout),但**同样必须先进阅读层** ——
+        // 连续滚动是画布的第三种版面,在网格层上根本不存在
+        vm.showReader()
         vm.layout = .scroll
         try? await Task.sleep(for: .milliseconds(900))
 
@@ -467,6 +520,78 @@ enum DemoDriver {
         log("scene=hint auto=\(auto) visible=\(vm.isHintBarVisible ? 1 : 0) "
             + "markerNow=\(ReaderTips().hasShownHintBar ? 1 : 0) "
             + "current=\(vm.pageIndex) pages=\(vm.pageCount)")
+    }
+
+    /// 场景:阅读层周边控件 —— 左侧缩略图栏 + 左右翻页箭头(2026-09-23)。
+    ///
+    /// 为什么需要它:`ONLY=reader` 那一段截的是**打开归档后的第一屏**,而
+    /// 2026-09-23 起那是**网格层**;周边控件只长在阅读层上,于是这套 UI 一度
+    /// 完全没有取证入口。`ONLY=hint` 的图里虽然也有它们,但那条图的主题是提示条,
+    /// 拿它当控件的证据属于"顺手蹭到"。
+    ///
+    /// **判据怎么分**(与 grid 那条同一套分工):
+    ///   · `layer=read` —— 确实停在阅读层。**这是断言项**:网格层没有这套控件,
+    ///     层不对则整张图与主题无关;
+    ///   · `thumbs` —— 左栏的数据源(网格池)里有多少张图,证明"栏里有东西可显示"。
+    ///     它**不等于**"栏画出来了" —— 画没画出来只有截图能证。
+    ///
+    /// ⚠️ **本段明确没覆盖两处**(别把这里的绿读成"周边控件全验了"):
+    ///   ① **鼠标静默时的淡化**(用户 2026-09-23 的第四条诉求)。淡化由
+    ///      `hudVisible` 与悬停两个输入驱动,而截图那一刻鼠标在哪、停了多久
+    ///      都不可控 —— 拍到的必然是**全亮态**。要断言它得能读像素亮度,
+    ///      本批没做,也就**不声称验过**;
+    ///   ② **箭头的方向语义**(右开时"下一页"在左)。状态行里的 `dir` 只证明
+    ///      **变量值**,证明不了它渲染在了正确的一侧 —— 那同样只有截图能看,
+    ///      而且要切一次右开再拍第二张。本批没做。
+    private static func runChrome(on vm: ReaderViewModel) async {
+        // 停在第 3 页:封面(第 1 页)的缩略图高亮恰好落在栏顶,看不出"高亮跟着
+        // 页码走";而第 3 页能把高亮推到栏里第二、三格,一眼可辨
+        vm.goTo(min(2, max(vm.pageCount - 1, 0)))
+        try? await Task.sleep(for: .milliseconds(900))
+
+        var thumbs = 0
+        for i in 0..<vm.pageCount where vm.gridThumbnail(at: i) != nil { thumbs += 1 }
+
+        log("scene=chrome layer=\(vm.layer == .read ? "read" : "browse") "
+            + "pages=\(vm.pageCount) thumbs=\(thumbs) current=\(vm.pageIndex) "
+            + "layout=\(vm.layout.rawValue) "
+            + "dir=\(vm.direction == .rightToLeft ? "rtl" : "ltr")")
+    }
+
+    /// 场景:**优雅退出**(2026-09-24)。
+    ///
+    /// 为什么需要它 —— 这条路本机**从来没被走到过**:
+    ///   · 真实 ⌘Q 要靠 AppleEvent / 按键注入,而 Ad-hoc 重签之后 TCC 授权失效
+    ///     (`-10004`),注入被系统直接拒掉;
+    ///   · 于是此前只剩 `kill -TERM` 这条替代证据。但信号走的是**异常**分支:
+    ///     进程被直接终结,`applicationWillTerminate` 根本不会被调用,session 标记
+    ///     停在 `alive=true`。它证明的恰恰是"异常退出下能被检出",与"优雅退出会
+    ///     收尾"是**方向相反**的两件事,不能互相顶替。
+    ///
+    /// ★ 关键选择:发的是 **`NSApp.sendAction(#selector(terminate:), to: nil, from: nil)`**,
+    ///   **不是**直接调 `NSApplication.terminate(_:)`。
+    ///   前者把 `terminate:` 交给**响应者链**去找实现,与菜单里那个「退出 Unroll」
+    ///   项做的事逐字相同(菜单项的 action 就是 `terminate:`、target 为 nil);
+    ///   后者绕开"菜单有没有接上线"这一层,于是**菜单项接错线 / 换菜单后漏接**
+    ///   这类故障会被漏掉 —— 而那正是本场景存在的理由。既然要验,就验真的那条路。
+    ///
+    /// 判据不在这里(进程马上就没了,App 没法断言自己),而在磁盘上:
+    /// `session.json` 的 `alive` 必须变成 false、面包屑末条必须是 `appTerminated`。
+    /// 那两条由 Scripts/probe-graceful-exit.sh 检查。
+    private static func runQuit() async {
+        log("run quit: 准备把 terminate: 发给响应者链(与菜单「退出」同一条路)")
+        // 留一点时间:① 让 LaunchServices 那侧把窗口画出来(与真实使用一致);
+        // ② 让 probe 脚本先把"App 在跑"这件事观察到位,免得它把"还没起来"
+        //    误读成"已经退出了"
+        try? await Task.sleep(for: .milliseconds(1200))
+        log("quit: sendAction(terminate:) now")
+        NSApp.sendAction(#selector(NSApplication.terminate(_:)), to: nil, from: nil)
+
+        // 正常情况写不到这一行 —— 进程已经退出了。
+        // 它**刻意保留**:一旦出现在日志里就说明 terminate: 没生效(响应者链里没人接、
+        // 或 NSApp 为 nil)。probe 脚本会把它当成一条明确的失败线索,而不是等超时。
+        try? await Task.sleep(for: .milliseconds(600))
+        log("quit: FATAL 已发出 terminate: 但进程仍然活着 —— 响应者链里没人接")
     }
 }
 #endif

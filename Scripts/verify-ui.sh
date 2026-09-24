@@ -6,7 +6,7 @@
 #   ./Scripts/verify-ui.sh                 # 拍全套截图到 docs/
 #   OUT_DIR=/tmp/shots ./Scripts/verify-ui.sh
 #   APP=/path/to/Unroll.app ./Scripts/verify-ui.sh    # 换被测的 .app
-#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg|grid|jump|scroll|export|hint)
+#   ONLY=password ./Scripts/verify-ui.sh              # 只跑某一段(all|empty|reader|password|crash|dmg|grid|jump|scroll|export|hint|chrome)
 #
 # 为什么要有这个脚本:
 #   交付前有几处只能靠"看"来判定的东西 —— 空态长什么样、加密归档的密码框长什么样、
@@ -44,8 +44,8 @@ if [ "$#" -gt 0 ]; then
     echo "✗ 不接受位置参数:$*" >&2
     echo "  这几个是环境变量,要写在命令**前面**:" >&2
     echo "    ONLY=<段名> APP=<.app> OUT_DIR=<目录> $0" >&2
-    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll | export | hint" >&2
-    echo "  (grid / jump / scroll / export / hint 需要可驱动的 Debug 版,见文末说明)" >&2
+    echo "  段名:all | empty | reader | password | crash | dmg | grid | jump | scroll | export | hint | chrome" >&2
+    echo "  (grid / jump / scroll / export / hint / chrome 需要可驱动的 Debug 版,见文末说明)" >&2
     exit 2
 fi
 
@@ -151,7 +151,8 @@ cleanup_probe_flags() {
     #      **DemoDriver.Scene 加一个 case → 本行就必须加一个文件名**
     #    两处不联动就是「跑完没清干净」的复发点,而它没有任何报错。
     rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" \
-          "$dir/demo-scroll" "$dir/demo-export" "$dir/demo-hint" 2>/dev/null || true
+          "$dir/demo-scroll" "$dir/demo-export" "$dir/demo-hint" "$dir/demo-chrome" \
+          2>/dev/null || true
 }
 
 # ------------------------------------------------------------------ 空态 --
@@ -393,7 +394,8 @@ fi
 
 # ------------------------- 缩略图网格 / 跳转面板预览(v1.1,2026-09-18 新增) --
 # 验的是 v1.1 加的两个「先看再跳」入口:
-#   · ⇧⌘G 缩略图网格      —— 一次铺开整卷,点哪页去哪页
+#   · ⇧⌘G 缩略图网格层    —— 一次铺开整卷,点哪页去哪页(自 2026-09-23 起它同时是
+#                            打开归档后的**默认落点**,见下面那条 ⚠️)
 #   · ⌥⌘G 跳转面板的预览  —— 输页码时就先看到目标页长什么样
 #
 # ⚠️ 前提:必须用**可驱动的 .app**(Debug 版)。这两个面板只能靠按键打开,
@@ -432,9 +434,17 @@ fi
 # 走的是同一个方法);于是 `auto=0` 在重复跑时属于**预期**,不能当失败 ——
 # 判据只看 `visible=1`。另:这一段**不验**「没盖住页面」,那由代码结构保证
 # (它是布局里的一行,不是浮层),截图只供人看;详见 DemoDriver.runHint 的说明。
+# ⚠️ **ONLY=grid 在 2026-09-23 有两处变化**,两处都容易让下一个人改错:
+#   ① 它拍的窗口换成了**主窗口** —— 网格从 sheet 提升为「层」,不再有自己的窗口。
+#      下面截图那一段的 `PANEL` 判定因此**反过来写**了(只列出仍是 sheet 的场景),
+#      别再照着"grid 是面板"的旧印象改回"scroll/hint 拍主窗口、其余拍面板";
+#   ② 驱动里 `runGrid` 之前的 `prepareForProbe` 会先切到**阅读层**(因为其余几个
+#      场景验的都是画布),`runGrid` 再切回网格层 —— 那条"返回"路径因此也进了取证。
+#      状态行里的 `layer=browse` 就是它切回去了的证据。
+# 断言本身没有变:仍是 stop=full / generated==pages / thumbs==pages / failed=skipped=0。
 if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
-   || [ "$ONLY" = "export" ] || [ "$ONLY" = "hint" ]; then
-    head2 "面板取证:网格 / 跳转预览 / 连续滚动 / 导出 / 阅读提示(ONLY=$ONLY)"
+   || [ "$ONLY" = "export" ] || [ "$ONLY" = "hint" ] || [ "$ONLY" = "chrome" ]; then
+    head2 "面板取证:网格 / 跳转预览 / 连续滚动 / 导出 / 阅读提示 / 周边控件(ONLY=$ONLY)"
 
     PROBE_TMP="$HOME/Library/Containers/com.gfredr.unroll/Data/tmp"
     DRIVER_LOG="$PROBE_TMP/demo-driver.log"
@@ -476,6 +486,7 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
     scroll) SCENE="scroll"; SHOT="shot-continuous-scroll.png"; WAIT_PAT="scene=scroll layout=" ;;
     export) SCENE="export"; SHOT="shot-export-panel.png";   WAIT_PAT="scene=export pages=" ;;
     hint)   SCENE="hint";   SHOT="shot-reading-tips.png";   WAIT_PAT="scene=hint " ;;
+    chrome) SCENE="chrome"; SHOT="shot-reader-chrome.png";  WAIT_PAT="scene=chrome layer=" ;;
     esac
 
     quit_app
@@ -537,6 +548,14 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
     if [ "$ONLY" = "grid" ]; then
         G_PAGES="$(field pages)"; G_GEN="$(field generated)"; G_STOP="$(field stop)"
         G_THUMBS="$(field thumbs)"; G_SKIP="$(field skipped)"; G_FAIL="$(field failed)"
+        # 「阅读层按『浏览』切回网格层」的机器判据(2026-09-23)。网格变成**层**之后,
+        # `runGrid` 是被 `prepareForProbe` 先切到阅读层、再由 `showGrid()` 切回来的 ——
+        # 这一段把上面注释里的说法从"叙述"变成"可判的事实"。
+        # ⚠️ 字段取自**另一行**:`layer=` 只在 `scene=grid layer=browse` 那一行上,
+        #    而 `field()` 解析的是紧随其后的 `scene=grid pages=…` 汇总行(两条不同的日志行)
+        G_LAYER="$(grep 'scene=grid layer=' "$DRIVER_LOG" | tail -1 | sed -n 's/.*layer=\([a-z]*\).*/\1/p')"
+        [ "${G_LAYER:-nil}" = "browse" ] && ok "确实切回了网格层(layer=browse)" \
+            || bad "没切回网格层:layer=${G_LAYER:-nil}(nil = 那一行没打出来,别读成『功能坏了』)"
         if [ "${G_STOP:-nil}" = "full" ]; then
             ok "生成正常结束(stop=full)"
         else
@@ -652,6 +671,23 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
         else
             info "这次没自动出现(auto=0)—— 预期之内:它只自动出现一次"
         fi
+    elif [ "$ONLY" = "chrome" ]; then
+        # ---- 阅读层周边控件:左侧缩略图栏 + 左右翻页箭头(2026-09-23)--------
+        C_LAYER="$(field layer)"; C_THUMBS="$(field thumbs)"; C_PAGES="$(field pages)"
+
+        # 唯一的结构性断言:**必须停在阅读层**。层不对,整张图与主题无关
+        [ "$C_LAYER" = "read" ] && ok "停在阅读层(layer=read)" \
+            || bad "没停在阅读层:layer=${C_LAYER:-nil}(左栏与箭头只长在阅读层上)"
+
+        # 左栏的**数据源**有多少张图。它只证明"有东西可显示",**不等于**"栏画出来了"
+        # —— 画没画出来只有截图能证(与 grid 那条同一套分工:状态行证数据、截图证观感)
+        if [ "${C_THUMBS:-0}" -gt 0 ] && [ "${C_PAGES:-0}" -gt 0 ]; then
+            ok "左栏数据源有图(thumbs=${C_THUMBS} / pages=${C_PAGES})"
+        else
+            bad "左栏没有可显示的缩略图:thumbs=${C_THUMBS:-nil} pages=${C_PAGES:-nil}"
+        fi
+
+        info "本段明确没覆盖:鼠标静默的淡化、箭头方向语义(理由见 DemoDriver.runChrome)"
     else
         # 走到这里说明 case 里加了场景、断言分支却没跟上。
         # **必须当场判红**:少一个分支的表现是"脚本全绿、断言一条没跑",
@@ -660,23 +696,34 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
     fi
 
     # ---- 截图 ----
-    # sheet 是独立窗口,且**没有标题** —— 主窗口的标题是「文件名 · P.n/m」。
-    # 这两点合起来是「哪个窗口是面板」的可靠判据(比按尺寸挑稳:主窗口
-    # 900x508、网格面板 720x520,高度几乎一样,按尺寸会选错)。
-    # 滚动模式没有面板,拍的就是**主窗口** —— 正是上面那条判据的反面;
-    # 阅读提示条也一样(它贴在主窗口的画布上方,不是独立面板)
+    # 判据仍是"有没有标题":sheet 是独立窗口且**没有标题**,主窗口的标题是
+    # 「文件名 · P.n/m」(比按尺寸挑稳:主窗口与网格层的高宽可能几乎一样)。
+    #
+    # ⚠️ **2026-09-23 反过来写了**。原先是"scroll / hint 拍主窗口,其余拍面板",
+    # 而网格从 sheet 提升为**层**之后它改拍主窗口 —— 上面那种写法会让它继续去找
+    # 一个**不存在的无标题窗口**,表现是截图失败或拍到别的东西,**而断言全绿**。
+    # 现在只列出"确实还是 sheet"的场景,其余一律当主窗口:
+    # 以后再来一个"层"场景,不写进这个列表就**天然是对的**
+    case "$ONLY" in
+    jump|export) PANEL=1 ;;   # 仍是 sheet
+    *)           PANEL=0 ;;   # 主窗口(grid 自 2026-09-23 起、scroll、hint)
+    esac
     ID=""
     for i in $(seq 1 20); do
-        if [ "$ONLY" = "scroll" ] || [ "$ONLY" = "hint" ]; then
-            ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3!="" {print $1; exit}')"
-        else
+        if [ "$PANEL" = "1" ]; then
             ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3=="" {print $1; exit}')"
+        else
+            ID="$("$WINID" unroll 2>/dev/null | awk -F'\t' '$2=="Unroll" && $3!="" {print $1; exit}')"
         fi
         [ -n "$ID" ] && break
         sleep 0.5
     done
     if [ -z "$ID" ]; then
-        bad "没找到要拍的窗口(面板 = 无标题 sheet;滚动模式 = 有标题的主窗口)"
+        if [ "$PANEL" = "1" ]; then
+            bad "没找到要拍的窗口(本场景是 sheet = 无标题窗口)"
+        else
+            bad "没找到要拍的窗口(本场景拍主窗口 = 有标题那个)"
+        fi
     else
         rm -f "$OUT_DIR/$SHOT"
         screencapture -l"$ID" -x -o "$OUT_DIR/$SHOT" 2>/dev/null
@@ -705,29 +752,42 @@ if [ "$ONLY" = "grid" ] || [ "$ONLY" = "jump" ] || [ "$ONLY" = "scroll" ] \
         if [ -x "$METRICS" ]; then
             M="$("$METRICS" "$OUT_DIR/$SHOT" 2>/dev/null || true)"
             mfield() { printf '%s\n' "$M" | awk -F= -v k="$1" '$1==k {print $2; exit}'; }
-            M_COL="$(mfield colRight)"; M_BAR="$(mfield barWhiteRight)"
+            M_COL="$(mfield colRight)"; M_LEFT="$(mfield colLeft)"
+            M_W="$(mfield contentWidth)"; M_BAR="$(mfield barWhiteRight)"
             M_H="$(mfield blockHeight)"; M_STRIP="$(mfield scrollerStrip)"
-            info "版式: 内容区右缘=${M_COL:-nil} 页高=${M_H:-nil} 页脚白段右缘=${M_BAR:-nil} 滚动条占位=${M_STRIP:-nil}"
+            # 内容区**实宽** = colRight − colLeft。
+            #
+            # 2026-09-23 阅读层左侧多了缩略图栏(112pt)之后,「内容区从 x=0 起」
+            # 这条老假设不再成立。拿 colRight 当宽度会把页面算宽**整整一个栏宽**
+            # (224 设备px),于是**正常状态被判成裁切** —— 正是「守卫把正常状态
+            # 说成故障」那一类假红。
+            #
+            # 兜底:`page_metrics` 的老二进制没有这两行 → mfield 返回空 →
+            # 退化成 colRight − 0,与改动前完全等价(set -u,故一律带 :-)
+            [ -n "${M_LEFT:-}" ] || M_LEFT=0
+            [ -n "${M_W:-}" ] || M_W=$(( ${M_COL:-0} - M_LEFT ))
+            info "版式: 内容区 ${M_LEFT}..${M_COL:-nil}(实宽 ${M_W:-nil}) 页高=${M_H:-nil} 页脚白段右缘=${M_BAR:-nil} 滚动条占位=${M_STRIP:-nil}"
 
             S_PAGES="$(field pages)"
-            if [ -n "$M_COL" ] && [ -n "$M_BAR" ] && [ -n "${S_FIRST:-}" ] && [ -n "${S_PAGES:-}" ]; then
-                # 页面按内容区实宽铺满 → 页脚白段右缘 = 实宽 × (index+1)/总页数
-                WANT=$(( M_COL * (S_FIRST + 1) / S_PAGES ))
-                D=$(( M_BAR - WANT )); [ "$D" -lt 0 ] && D=$(( -D ))
+            if [ "${M_W:-0}" -gt 0 ] && [ -n "$M_BAR" ] && [ -n "${S_FIRST:-}" ] && [ -n "${S_PAGES:-}" ]; then
+                # 页面按内容区实宽铺满 → 页脚白段右缘**距页左缘** = 实宽 × (index+1)/总页数
+                WANT=$(( M_W * (S_FIRST + 1) / S_PAGES ))
+                GOT=$(( M_BAR - M_LEFT ))
+                D=$(( GOT - WANT )); [ "$D" -lt 0 ] && D=$(( -D ))
                 if [ "$D" -le 5 ]; then
-                    ok "页面铺满内容区实宽(页脚白段 ${M_BAR} ≈ ${WANT} 设备px)"
+                    ok "页面铺满内容区实宽(页脚白段距页左缘 ${GOT} ≈ ${WANT} 设备px)"
                 else
-                    bad "页面被横向裁了:页脚白段 ${M_BAR},按内容区实宽应为 ${WANT}(差 ${D} 设备px)"
+                    bad "页面被横向裁了:页脚白段距页左缘 ${GOT},按内容区实宽应为 ${WANT}(差 ${D} 设备px)"
                 fi
             else
-                bad "量不出页面版式:colRight=${M_COL:-nil} bar=${M_BAR:-nil}"
+                bad "量不出页面版式:contentWidth=${M_W:-nil} bar=${M_BAR:-nil}"
             fi
 
             # 第二条独立判据:页高必须等于「按内容区实宽等比」的高度。
-            # 被裁时页面按 900pt 排(高 675),实宽等比只要 664 —— 差 11。这条
-            # 不依赖页脚进度条,所以它和上面那条不会「同时瞎」
-            if [ -n "$M_H" ] && [ -n "$M_COL" ]; then
-                WANTH=$(( M_COL * GEN_H / GEN_W ))
+            # 裁切时页面按更宽的容器排,于是比实宽等比**更高** —— 差值与栏宽同量级。
+            # 这条不依赖页脚进度条,所以它和上面那条不会「同时瞎」
+            if [ -n "$M_H" ] && [ "${M_W:-0}" -gt 0 ]; then
+                WANTH=$(( M_W * GEN_H / GEN_W ))
                 DH=$(( M_H - WANTH )); [ "$DH" -lt 0 ] && DH=$(( -DH ))
                 if [ "$DH" -le 8 ]; then
                     ok "页面按实宽等比:页高 ${M_H} ≈ ${WANTH}"

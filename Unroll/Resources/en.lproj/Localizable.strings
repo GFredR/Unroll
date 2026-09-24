@@ -205,22 +205,45 @@
 /* Encrypted pages skipped (not damage) */
 "integrity.skipped" = "%ld pages were skipped because they are encrypted. Enter the archive password and run the check again to include them.";
 
-/* ============ v1.1: "Thumbnail Grid" + jump preview (2026-09-18) ============ */
+/* ============ v1.1: "Thumbnail Grid" + jump preview (2026-09-18)
+                v1.2.0: the grid became the *default layer* (2026-09-23) ============ */
 
 /* View menu (⇧⌘G, the mnemonic for Grid; ⌥⌘G already belongs to "Go to Page").
    The two are deliberately adjacent — one is "I know the page number", the other
-   is "show me what's in here" */
+   is "show me what's in here".
+   Since 2026-09-23 this command is also the way *back* to the grid from the reading
+   layer, so it reads as "go to the grid" rather than "open a panel" */
 "app.menu.thumbnailGrid" = "Thumbnail Grid…";
 
-/* Grid panel */
+/* Grid layer. It is where an archive opens now, and where the reading layer's
+   "Browse" button returns to. It has no Done button any more — leaving the layer
+   happens by clicking a page or by Esc — so instead of `done` there is `leaveHint` */
 "reader.grid.title" = "Thumbnail Grid (%ld pages)";
 "reader.grid.building" = "Generating thumbnails… %ld / %ld";
 "reader.grid.generated" = "%ld of %ld generated";
-"reader.grid.hint" = "Click any page to jump to it.";
 "reader.grid.cellHint" = "Go to page %ld";
-"reader.grid.done" = "Done";
+"reader.grid.leaveHint" = "Click a page to start reading · Esc goes back";
 "reader.grid.stop" = "Stop";
 "reader.grid.regenerate" = "Regenerate";
+
+/* Reading-layer HUD. "Browse" is the only *visible* route back to the grid layer.
+   Before 2026-09-23 the only route was ⇧⌘G — no button, no trace, which meant the
+   user had to remember the shortcut to get back out */
+"reader.hud.browse" = "Browse";
+"reader.hud.browse.hint" = "Back to the thumbnail grid (⇧⌘G)";
+
+/* Reader chrome: the controls around the canvas that are always there (2026-09-23).
+   `backToGrid` is the *same route* as the HUD's "Browse" — the difference is only
+   visibility. That one lives in an overlay that fades to zero; this one sits in the
+   rail and stays. Both exist because "reading, want to glance back" and "stopped,
+   mouse parked, still need to see the way out" are different moments */
+"reader.chrome.backToGrid" = "All pages";
+"reader.chrome.backToGrid.hint" = "Back to the thumbnail grid (⇧⌘G)";
+"reader.chrome.rail.cellHint" = "Page %ld · click to jump";
+/* Arrow buttons on either side of the canvas. Which side means "next" follows the
+   reading direction, so these two strings are about direction, not about screen side */
+"reader.chrome.prevPage" = "Previous page";
+"reader.chrome.nextPage" = "Next page";
 
 /* Four stop reasons, stated separately — folding them into one sentence would lie */
 "reader.grid.budgetReached" = "Memory limit reached — later pages keep their page numbers instead of thumbnails (they are still clickable).";

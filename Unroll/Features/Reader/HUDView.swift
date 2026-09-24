@@ -21,6 +21,10 @@ struct HUDView: View {
     /// 否则拖到一半 HUD 淡出,滑杆看不见也就拖不下去了
     let onActivity: () -> Void
 
+    /// 点「浏览」→ 切回网格层(2026-09-23)。回调注入,不让 HUD 自己去碰
+    /// ViewModel 的层状态 —— 与 `onActivity` 同一条纪律:视图只回答"用户点了什么"
+    let onBrowse: () -> Void
+
     /// 拖动中的目标页(0-based);nil = 未在拖动。
     /// **拖动只改这个本地值**,松手才 `goTo` —— 逐帧跳页会触发逐帧解码,
     /// 拖过 200 页就是 200 次解码,卡到没法用
@@ -57,6 +61,7 @@ struct HUDView: View {
             }
 
             progressBar
+            browseButton
         }
         .foregroundStyle(.white)
         .padding(.horizontal, DesignSystem.Spacing.lg)
@@ -101,6 +106,34 @@ struct HUDView: View {
                 .frame(width: 160)
                 .allowsHitTesting(false)
         }
+    }
+
+    // MARK: 浏览(= 回网格层)
+
+    /// 「浏览」是两级结构里**阅读层唯一的可见退路**(2026-09-23)。
+    ///
+    /// 此前从大图回到网格只有 `⇧⌘G` 一条路 —— 没有按钮、没有痕迹,要求用户
+    /// **先记得住这个键**,而且网格在观感上只是个"用一下就消失的浮层",
+    /// 不像一个可以回去的地方。这一枚按钮就是补上那个缺口:回头路要看得见。
+    ///
+    /// ⚠️ HUD 整体是 `.accessibilityElement(children: .combine)`(见 body 末尾),
+    /// 所以这枚按钮**不单独进 VoiceOver 焦点**。功能上不缺失 ——
+    /// 菜单「显示 → 缩略图网格」是同一条路,`⇧⌘G` 也在。把它拆成独立可访问元素
+    /// 需要重排 HUD 的可访问性结构(会改动既有的"一句话播报"行为),本批没做
+    private var browseButton: some View {
+        Button(action: onBrowse) {
+            HStack(spacing: DesignSystem.Spacing.xs) {
+                Image(systemName: "square.grid.2x2")
+                    .accessibilityHidden(true)   // 装饰性图标(AGENTS.md 十一.3)
+                Text(L10n.tr("reader.hud.browse"))
+            }
+            .font(.system(size: DesignSystem.Typography.footnote, weight: .medium))
+        }
+        .buttonStyle(.plain)
+        // 品牌色而不是 HUD 的白:它与页码 / 文件名不是一类东西 ——
+        // 那两个是"告诉你现在在哪",这一个是"可以点"
+        .foregroundStyle(DesignSystem.Palette.brand)
+        .help(L10n.tr("reader.hud.browse.hint"))
     }
 
     /// 读数取「拖动中的目标」优先,否则取真实页码。

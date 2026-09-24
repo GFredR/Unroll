@@ -354,9 +354,24 @@ final class ReaderViewModel: ObservableObject {
     /// 用户盯着面板看缩略图一张张出来,进度条告诉他「快好了」还是「别等了」
     @Published private(set) var grid: GridState?
 
-    /// 网格面板的显隐。与 `grid` 分开的理由同 `isIntegritySheetPresented`:
-    /// 面板开合是**视图状态**,而生成状态要被测试直接断言
-    @Published var isGridSheetPresented = false
+    /// 界面当前在哪一层(2026-09-23)。网格从「浮层面板」提升为**默认层**之后,
+    /// 这里承载的是「用户在浏览还是在阅读」这件**结构性**的事 —— 它不再是一个
+    /// 面板开关,于是也不能再叫 `isGridSheetPresented`
+    ///
+    /// **为什么不往 `Phase` 里加一态**:`Phase` 描述的是**归档级**状态
+    /// (无文档 → 打开中 → 阅读 / 失败)。「浏览还是阅读」是**同一份文档内**的层级,
+    /// 塞进 `Phase` 会让每一处 `phase == .reading` 的判断都得多问一句"哪一层",
+    /// 而 `canShowGrid` / `canExportPages` / `canCheckIntegrity` 这些可用性判据
+    /// 在两层里**答案完全相同**(文档开着就是开着)
+    @Published var layer: ViewLayer = .browse
+
+    /// 打开一份归档后先落在哪一层。默认 `browse` —— 先看全卷,再决定读哪一页
+    enum ViewLayer: Equatable {
+        /// 缩略图网格层。**打开后的默认落点**,也是阅读层「返回」的目的地
+        case browse
+        /// 大图阅读层
+        case read
+    }
 
     enum GridState: Equatable {
         case building(done: Int, total: Int)
@@ -380,7 +395,11 @@ final class ReaderViewModel: ObservableObject {
     /// 于是重开面板可以直接显示,不必重扫
     private var lastGridReport: PageGridReport?
 
-    private var gridBuildTask: Task<Void, Never>?
+    /// 当前这一轮生成的任务。**`private(set)` 而不是 `private`**(2026-09-23):
+    /// 打开归档时那一轮生成是 `performOpen` 自己起的,没有返回值可以 await ——
+    /// 而测试需要"等它落定"的确切手段,否则只能 sleep 猜时间。
+    /// 界面不需要读它(`grid` 状态自己会更新),所以只开放读、不开放写
+    private(set) var gridBuildTask: Task<Void, Never>?
 
     /// 「这一轮生成」的代号。理由与 `integrityGeneration` 完全一致:
     /// Task 的取消是**协作式**的,`cancel()` 之后后台那个同步 C 循环还要跑到
@@ -400,17 +419,34 @@ final class ReaderViewModel: ObservableObject {
         return false
     }
 
-    /// 打开网格面板。已有现成结果 → **直接显示,不重扫**(见 `lastGridReport`);
+    /// 切到网格层。已有现成结果 → **直接显示,不重扫**(见 `lastGridReport`);
     /// 否则开始生成。返回本次生成任务(已有结果时为 nil)
+    ///
+    /// 这是「浏览」(阅读层 HUD 那个按钮 / `⇧⌘G`)唯一的落点,也是打开归档后
+    /// 的自动落点 —— 三条入口走同一个方法,不会各自长出一套状态
     @discardableResult
     func showGrid() -> Task<Void, Never>? {
         guard canShowGrid else { return nil }
-        isGridSheetPresented = true
+        layer = .browse
         if let report = lastGridReport {
             grid = .ready(report)
             return nil
         }
+        // ⚠️ **生成中就不要再起一轮**(2026-09-23 加,不然后果很隐蔽):
+        // 打开即网格之后,用户完全可能在第一轮扫描跑完之前就按「浏览」回来。
+        // 而 `lastGridReport` 要到**跑完**才写 —— 若这里无条件 `buildGrid()`,
+        // 那一次点击就会**取消并重开**整个全档顺序扫描:越点越慢,而界面上
+        // 只看得出"进度条又回到 0"(`buildGrid` 第一句就是
+        // `grid = .building(done: 0, total:)`),看不出自己刚把工作作废了一次
+        if let inFlight = gridBuildTask { return inFlight }
         return buildGrid()
+    }
+
+    /// 回到阅读层(网格里点了一格之后)。**只切层** ——
+    /// 生成任务不取消、池子不动:用户马上就要读,而网格多半还要回去看
+    func showReader() {
+        guard phase == .reading else { return }
+        layer = .read
     }
 
     /// 重新生成(面板上的「重新生成」)。**丢弃现成的重扫一遍** ——
@@ -442,7 +478,7 @@ final class ReaderViewModel: ObservableObject {
         let pool = ThumbnailStore()
         gridThumbs = pool
         grid = .building(done: 0, total: total)
-        isGridSheetPresented = true
+        layer = .browse
         Breadcrumbs.shared.record(.gridBuildStarted(pages: total))
 
         let maxPixel = DesignSystem.PageBudget.gridThumbnailLongEdge
@@ -484,9 +520,10 @@ final class ReaderViewModel: ObservableObject {
                 // 若这期间用户换了书,这一轮的缩略图已经**不属于**当前文档了
                 guard vm.gridGeneration == generation else { return }
                 vm.lastGridReport = report
-                // 面板可能已经被关掉了(关面板会 cancel 本轮)——
-                // 那就只留报告,不往 `grid` 写一个没人看的终态
-                if vm.isGridSheetPresented {
+                // 用户可能已经切到阅读层了(点了一格就开始读)——
+                // 那就只留报告,不往 `grid` 写终态:回来时 `showGrid()` 会用
+                // `lastGridReport` 直接把 `.ready` 填上,不必重扫
+                if vm.layer == .browse {
                     vm.grid = .ready(report)
                 }
                 vm.gridBuildTask = nil
@@ -498,22 +535,17 @@ final class ReaderViewModel: ObservableObject {
         return task
     }
 
-    /// 中断生成(面板上的「停止」)。**保留已生成的缩略图** ——
+    /// 中断生成(网格层上的「停止」)。**保留已生成的缩略图** ——
     /// 报告会带 `.cancelled`,不是「白干了」
+    ///
+    /// ⚠️ **这是取消生成的唯一入口**(2026-09-23)。此前还有一个 `dismissGrid()`:
+    /// 关面板时顺手取消本轮,理由是"不可见的重活不该继续烧 CPU"。
+    /// 网格变成**层**之后那条理由不成立了 —— 从网格层切到阅读层是最常见的动作
+    /// (点一格就开始读),而生成恰恰**必须继续**:用户随时会按「浏览」回来,
+    /// 而半空的网格比什么都糟(重扫一次要顺序扫全档,solid 7z 上是秒级)。
+    /// 池子与报告照旧留着,唯一的释放点仍是换书 / 关窗
     func cancelGridBuild() {
         gridBuildTask?.cancel()
-    }
-
-    /// 关掉网格面板。**池子与报告留着**(见 `gridThumbs` 的说明)——
-    /// 真正的释放点是换书 / 关窗。这里只清视图状态
-    ///
-    /// 生成中关面板会**停掉生成**:不可见的重活不该继续烧 CPU 与磁盘
-    /// (与 `dismissIntegrity` 同款判断)。已生成的部分留在池子里,
-    /// 重开面板即见,想接着做得点「重新生成」
-    func dismissGrid() {
-        gridBuildTask?.cancel()
-        isGridSheetPresented = false
-        grid = nil
     }
 
     /// 取某页缩略图(nil = 还没生成到它 / 该页没有缩略图)。
@@ -680,7 +712,9 @@ final class ReaderViewModel: ObservableObject {
         lastGridReport = nil
         gridThumbs = ThumbnailStore()   // 换池子(对象身份即代次隔离,见 gridThumbs 说明)
         grid = nil
-        isGridSheetPresented = false
+        // 更早的预备:打开后落在网格层(见 `performOpen` 成功路径)。
+        // 这里先把层复位,免得失败态 / 需要密码态残留上一本的层
+        layer = .browse
         // 导出同理:进行中的导出读的是**旧文档**,而它的文件名前缀也来自旧书
         // (沿用旧的名字就会把新书的页写成一堆旧书名的文件)。只 cancel 不够 ——
         // 协作式取消要等一个检查点,代号 +1 才能让已经跑完、正排队等回主线程的
@@ -759,6 +793,18 @@ final class ReaderViewModel: ObservableObject {
             isUnlockSheetPresented = false
             phase = .reading
 
+            // 打开即网格(2026-09-23):文档一就绪就**立刻**开始生成缩略图,
+            // 界面留在网格层。这是「打开 → 浏览 → 点格进大图」那条主链的起点。
+            //
+            // 为什么在这里触发而不等 View 的 onAppear:生成是**顺序扫全档**
+            // (solid 7z 上是秒级,§5.14 约束①),越早开始越早填满;而它跑在
+            // detached 任务里,不挡主线程。
+            //
+            // ⚠️ 此刻**磁盘上确实有两件事同时在跑**(网格顺序扫描 + 当前页解码),
+            // 但两者各持**独立的扫描器实例**(`PageGridBuilder.build` 自己 new 一个
+            // `SequentialPageReader`,`PageStore` 另有一个)—— `struct archive` 非
+            // 线程安全,共享实例才是地雷,各自持有正是 §5.14 约束④ 的设计
+            showGrid()
             // 首次阅读提示条(2026-09-22):只在这一生中的第一次自动出现。
             // 注意这两句是**同步写、中间没有 await** —— 取消只可能在挂起点生效,
             // 所以不存在"标记写了、提示条却没显示"的中间态(写的顺序因此无所谓)
@@ -947,7 +993,10 @@ final class ReaderViewModel: ObservableObject {
             lastGridReport = nil
             gridThumbs = ThumbnailStore()
             grid = nil
-            isGridSheetPresented = false
+            // ⚠️ 这里**刻意不动 `layer`**(2026-09-23):解锁发生在阅读中
+            // (入口是「文件 → 输入解压密码…」),把用户弹回网格层等于打断阅读。
+            // 作废池子与报告已经够了 —— 下次按「浏览」时 `showGrid()` 会因为
+            // `lastGridReport == nil` 重扫一遍,那几页加密页届时就能出图了
             // 导出同理:解锁前的导出里,加密页是被**跳过**的(报告里那些是
             // 「没给密码」而不是读不出来)。留着那份结论,用户会以为那几页本来
             // 就导不出来 —— 其实再导一次就有了。换的是 document,报告一起作废
