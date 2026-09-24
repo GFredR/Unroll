@@ -103,6 +103,40 @@ final class PageGridViewModelTests: XCTestCase {
         }
     }
 
+    /// **续读时的落点仍然是网格层** —— 这条钉的是「续读」与「打开即网格」的冲突。
+    ///
+    /// 两者的愿望正面相顶:续读 = "回到上次的模式与页码",而"打开即网格" = "打开先看目录"。
+    /// 定价(2026-09-24 定,方案 B):续读**只恢复页码与版式**,不自动进阅读层 ——
+    /// 打开先给人看目录,而页码已经停在续读位置,点任意一格就从那里读。
+    /// (另外两条走法被否:A 不改编读语义,与"打开即网格"直接打架;C 加偏好开关,
+    ///  为一个二元选择多一个设置项,不划算)
+    ///
+    /// 代码在顺序上本来就是这个语义 —— `performOpen` 里先 `showGrid()`,
+    /// 之后那段续读只写 `layout / direction / fitMode / pageIndex`,**从不碰 `layer`**。
+    /// 但"从来没被断言过"约等于没定过:这一条把它钉死。
+    func testResumeLandsOnGridLayerNotReader() async throws {
+        let url = try fixture("plain.cbz")
+        let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
+
+        // ⚠️ 不能先 `makeViewModel()` 再写进度:那个 helper 每次都会
+        // `removePersistentDomain` 清空 —— 顺序反了就悄悄变成"没有续读记录"那条路,
+        // 而那条路本来就有用例了(上一条),这条会变成它的重复而毫无价值
+        let defaults = UserDefaults(suiteName: Self.suiteName) ?? .standard
+        defaults.removePersistentDomain(forName: Self.suiteName)
+        ReadingProgress(defaults: defaults).save(
+            key: ReadingProgress.key(name: url.lastPathComponent, size: size),
+            page: 2, layout: "single", direction: "leftToRight", fitMode: "fit")
+
+        let vm = ReaderViewModel(progressStore: ReadingProgress(defaults: defaults),
+                                 bookmarkStore: Bookmarks(defaults: defaults),
+                                 tips: ReaderTips(defaults: defaults))
+        await vm.open(url: url).value
+        try XCTSkipIf(!vm.canShowGrid, "fixture 可读性受限(测试宿主沙盒)")
+
+        XCTAssertEqual(vm.pageIndex, 2, "续读要把页码恢复到上次那一页")
+        XCTAssertEqual(vm.layer, .browse, "续读**不**自动进阅读层 —— 打开仍落在网格")
+    }
+
     // MARK: - 生成落地
 
     /// 生成完必须是 `.ready` + 报告,而且**池子真的填满了**。

@@ -61,8 +61,11 @@ struct UnrollApp: App {
                 .sheet(isPresented: $isShortcutSheetPresented) {
                     ShortcutSheet()
                 }
-                // 窗口大小/位置记忆:AppKit setFrameAutosaveName 自动持久化并恢复
-                // (2026-09-16 顺带接管窗口标题:带文件名与页码,见 WindowChrome)
+                // 窗口尺寸/位置记忆 = **自管**(2026-09-24,判据与存储见 `Core/WindowGeometry.swift`)。
+                // 系统那两条路都实测过、都不生效,所以这里不再猜系统行为,自己存一个固定键;
+                // 读写的时机由 `WindowChrome` 负责,两类证据(`probe-window-memory.sh` 的
+                // 20 → 21 → 22,以及空的 `Saved Application State/`)记在它的文档注释里。
+                // 接管窗口标题那部分与记忆无关(走 `WindowChrome.updateNSView`),一直是有效的
                 .background(WindowChrome(title: reader.windowTitle))
                 // Finder 双击 / 系统打开方式:文件访问权由系统自动授予(沙盒下同理)
                 .onOpenURL { url in
@@ -73,6 +76,8 @@ struct UnrollApp: App {
                     #if DEBUG
                     // 仅调试构建:launch argument `-demoScript` 时按时间轴自动演示(录 GIF 用)
                     DemoDriver.startIfNeeded(on: reader)
+                    // 仅调试构建:窗口记忆探针(容器标记文件驱动,见本文件 WindowProbe)
+                    WindowProbe.startIfNeeded()
                     #endif
                 }
                 // 翻页后刷新进度索引:最近打开菜单里的「P.3/200」要跟得上阅读位置
@@ -93,15 +98,15 @@ struct UnrollApp: App {
         // 被静默忽略(它只作用在窗口内容,不影响 NSWindow 起手尺寸)。
         // 数字见 `DesignSystem.Window`(唯一来源)
         //
-        // ⚠️ 窗口几何被记忆:已经存过 frame 的机器**看不到这里的默认值生效**
-        // (系统直接恢复旧 frame)—— 这是本批唯一一个"改完可能看不出变化"的点。
-        //
-        // ⚠️ 2026-09-23 同日更正:上一句原先写的是"删掉 UserDefaults 里的
-        // `NSWindow Frame UnrollMainWindow` 即可" —— **那个键从未存在过**
-        // (清空记忆后逐键检查容器 plist:计数 0)。真正在记的是 **SwiftUI 自己
-        // 派生的 `NSWindow Frame SwiftUI.…` 键**,而它按"视图修饰符链"派生,
-        // 链一变就换键。所以"想回到新默认值"的正确做法是**整体删掉该 App 的
-        // UserDefaults 域**,而不是去找一个具体键名(见 WindowChrome 的文档注释)
+        // ⚠️ `.defaultSize` 现在是**真正的"首次"语义**(2026-09-24 起):
+        // 自管记忆(`Core/WindowGeometry.swift`)一旦有记录,就会在窗口就位时覆盖它。
+        // 在这之前它是"每次都生效" —— 因为记忆从来没工作过(见 `WindowChrome` 注释)。
+        // 所以**开发机上看不出这一行的变化是正常的**(那台机器上有记录)。
+        // 想回到默认值 = 清掉那个固定键 `window.frame.v1`,没有菜单入口
+        // (`Scripts/probe-window-memory.sh` 的 clear 档就是干这个的)。
+        // ⚠️ 别去删 SwiftUI 派生出来的那些 `NSWindow Frame SwiftUI.…` 键:它们与本记忆
+        // 无关(造它们的那套机制读不回自己),而且 `defaults delete` 会让 cfprefsd
+        // 拿缓存整份重写 plist —— 实测删 3 个键掉了 6 个,见测试文档 §22/§23.2
         .defaultSize(width: DesignSystem.Window.defaultWidth,
                      height: DesignSystem.Window.defaultHeight)
         .windowStyle(.automatic)
@@ -404,22 +409,39 @@ struct UnrollApp: App {
     }
 }
 
-// MARK: - 窗口外观:尺寸记忆 + 标题(v2,2026-09-15 / 2026-09-16)
+// MARK: - 窗口外观:尺寸记忆 + 标题(v2,2026-09-15 / 2026-09-16;记忆 2026-09-24 改为自管)
 
-/// 窗口尺寸/位置记忆**由 SwiftUI 自己的窗口恢复机制提供**:`WindowGroup` 会按
-/// 视图修饰符链派生一个 `NSWindow Frame SwiftUI.…` 键,启动时自动恢复。
-/// 隐私上只有窗口几何数据,无任何文档信息。
+/// 窗口尺寸/位置记忆 + 标题。**记忆是自管的**(2026-09-24):
+/// 判据与存储都在 `Core/WindowGeometry.swift`,这里只负责两件不可单测的事 ——
+/// **什么时候读**(窗口就位时一次)、**什么时候写**(用户真的动过 / 退出时)。
 ///
-/// ⚠️ **2026-09-23 更正一处过度声称**。这里原先调
-/// `window?.setFrameAutosaveName("UnrollMainWindow")`,注释写的是"借 AppKit 的
-/// frameAutosaveName 实现零自管存储"。实测(清空记忆后逐键检查容器 plist):
-/// **`NSWindow Frame UnrollMainWindow` 这个键从未出现过**。记忆功能一直是好的,
-/// 好的是另一条路 —— SwiftUI 那条。所以 `viewDidMoveToWindow` 里那行
-/// **不要再被当作记忆的实现**来读。
+/// ⚠️ 为什么不用系统那两条路 —— 都实测过、都不生效(留档,别再改回去):
+/// ① `window?.setFrameAutosaveName("UnrollMainWindow")`:2026-09-23 的原注释说它是
+///    "借 AppKit 的 frameAutosaveName 实现零自管存储"。逐键检查容器 plist:
+///    **`NSWindow Frame UnrollMainWindow` 这个键从未出现过** —— `viewDidMoveToWindow`
+///    里那行不是记忆的实现,不要那样读它。
+/// ② 同一次更正里还写过"记忆功能一直是好的,好的是另一条路 —— SwiftUI 那条",
+///    以及"老用户看到的是记忆值。这不是 bug,是记忆在工作" —— **两句都不成立**:
+///    SwiftUI 派生的键名里含**一次性的代码地址**
+///    (`…ModifiedContent<(unknown context at $10b1fce30).WindowChrome>…`),
+///    于是每次启动都是新键 ⇒ 永远读不到"上次"。取证:同一二进制连启两次,
+///    frame 键数 **20 → 21 → 22**(`Scripts/probe-window-memory.sh`);
+///    第二条独立证据:`Saved Application State/` 目录**是空的**。
+///    ⇒ **2026-09-24 之前,窗口记忆在本 App 上从来没工作过。**
 ///
-/// 这个更正有一个直接后果:`UnrollApp` 的 `.defaultSize` **只在没有任何记忆时
-/// 生效**,而记忆键是"视图修饰符链"派生的 —— 链一变就换键,等于自动重置。
-/// 老用户看到的是记忆值。这不是 bug,是记忆在工作
+/// 写入的三处时机(每一处都对着一个具体的失败形态):
+///   · `didEndLiveResize` —— 用户拖完尺寸。**只有真的手动缩放才会发**,
+///     所以它是"用户意图"最干净的信号;
+///   · `didMove` —— 移动窗口。它与上一条不同:程序化 `setFrame` 也会发,
+///     所以要等**武装**(见 `armed`)之后才收。否则启动期 SwiftUI 自己设的那次
+///     frame 会把用户存的几何当场擦成默认值 —— "一开机就被自己擦掉记忆"
+///     是这类实现最典型的坏法,而且坏得完全无声;
+///   · `willTerminate` —— 退出兜底:只移动、没缩放过就退出,靠它落盘。
+/// 武装晚一拍的代价是"启动那一瞬间的几何变化一律不写",失败形态**偏向安全**:
+/// 最坏是不写,不会把用户存的几何写坏。
+///
+/// 每次启动仍会在偏好文件里多留一个 SwiftUI 派生的 frame 键(那套机制读不回自己,
+/// 却在关窗时照写;本地开发机已攒 20+ 个)。它无害、与本记忆无关,别去删。
 ///
 /// 2026-09-16 顺带接管标题(`文件名 · P.3/200`):`WindowGroup("app.name")` 的标题是
 /// 静态的,而 Window 菜单 / Dock 悬停 / 多窗口辨认都需要**动态**页码。
@@ -440,19 +462,200 @@ private struct WindowChrome: NSViewRepresentable {
         /// 故标题要缓存一份,等 `viewDidMoveToWindow` 再补写
         private var pendingTitle = ""
 
+        /// 恢复/落盘各做一次,别重复挂观察者(窗口在本生命周期内不变)
+        private var didAdopt = false
+        /// **武装**:`didMove` 只有武装之后才写盘。理由见文档注释 ——
+        /// 启动期 SwiftUI 自己设的那次 frame 也会发 `didMove`
+        private var armed = false
+        /// 我们最后写过的几何。相同就不重复写(省一次磁盘写,也让"有没有动过"可读)
+        private var lastWritten: WindowGeometry?
+        private let store = WindowFrameStore()
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
-            window?.setFrameAutosaveName("UnrollMainWindow")
             apply(title: pendingTitle)
+            adoptIfNeeded()
         }
+
+        deinit { NotificationCenter.default.removeObserver(self) }
 
         func apply(title: String) {
             pendingTitle = title
             guard let window, window.title != title else { return }
             window.title = title
         }
+
+        // MARK: - 恢复(窗口就位时一次)
+
+        /// 读存储 → 交给纯判据解析 → 应用。解不出来或没有记录时**什么都不做**,
+        /// 于是 `.defaultSize` 说了算(见 `WindowMemory.resolve` 的 nil 三种情况)
+        private func adoptIfNeeded() {
+            guard let window, !didAdopt else { return }
+            didAdopt = true
+
+            let restored = WindowMemory.resolve(
+                saved: store.load(),
+                screens: NSScreen.screens.map(\.visibleFrame),
+                minSize: CGSize(width: DesignSystem.Window.minWidth,
+                                height: DesignSystem.Window.minHeight))
+            if let restored {
+                lastWritten = restored
+                window.setFrame(restored.rect, display: true)
+            }
+            observe(window)
+        }
+
+        // MARK: - 落盘(三处时机)
+
+        private func observe(_ window: NSWindow) {
+            let center = NotificationCenter.default
+            // 刻意用**选择子**而不是闭包:这几个通知都在主线程发,而块式 API 在
+            // Swift 6 严格并发下要求 `@Sendable` 闭包 —— 捕获 self(NSView)会直接报错,
+            // 绕开它只能加锁或包一层 box。选择子走 AppKit 原生路径,没有这个问题
+            center.addObserver(self, selector: #selector(handleLiveResizeEnded(_:)),
+                               name: NSWindow.didEndLiveResizeNotification, object: window)
+            center.addObserver(self, selector: #selector(handleMoved(_:)),
+                               name: NSWindow.didMoveNotification, object: window)
+            center.addObserver(self, selector: #selector(handleWillTerminate(_:)),
+                               name: NSApplication.willTerminateNotification, object: nil)
+            center.addObserver(self, selector: #selector(handleBecameKey(_:)),
+                               name: NSWindow.didBecomeKeyNotification, object: window)
+            // 窗口可能**在我们挂上观察者之前就已经是 key** 了(启动顺序不保证),
+            // 所以除了通知,这里还要自己查一次 —— 只挂通知会静默漏掉"从没武装过"
+            if window.isKeyWindow { armAfterOneTurn() }
+        }
+
+        /// 武装 = 放**一个主队列回合**。选"一个回合"而不是固定秒数的理由:
+        /// 要挡的是同一轮启动流程里 SwiftUI 自己那次 `setFrame`,它是紧接着发生的;
+        /// 跨过一回合之后再来变化,就是用户的动作了
+        private func armAfterOneTurn() {
+            guard !armed else { return }
+            DispatchQueue.main.async { [weak self] in self?.armed = true }
+        }
+
+        @objc private func handleBecameKey(_ note: Notification) { armAfterOneTurn() }
+
+        @objc private func handleLiveResizeEnded(_ note: Notification) {
+            // 手动缩放是**用户意图**最干净的信号:程序化 `setFrame` 不会发这个通知。
+            // 顺带把它当"窗口已稳定"的证据 —— 一次手动缩放之后就没必要再等武装了
+            armed = true
+            persist()
+        }
+
+        @objc private func handleMoved(_ note: Notification) {
+            guard armed else { return }
+            persist()
+        }
+
+        @objc private func handleWillTerminate(_ note: Notification) {
+            guard armed else { return }
+            persist()
+        }
+
+        private func persist() {
+            guard let window, window.isVisible else { return }
+            let geometry = WindowGeometry(rect: window.frame)
+            guard geometry != lastWritten else { return }
+            lastWritten = geometry
+            store.save(geometry)
+        }
     }
 }
+
+#if DEBUG
+// MARK: - 窗口记忆探针(仅调试构建,2026-09-24)
+
+/// 让 App **自己**报出 / 改动自己的窗口几何 —— 因为从外面驱动窗口在这台机器上做不到:
+/// `System Events` 注入被 TCC 拒(1002),`open --args` 在 macOS 15 上不转发 argv
+/// (DemoDriver 也是因此改用容器标记文件的)。这里走同一条已验证的路:
+/// 标记文件放容器 tmp,内容即指令,App 读完**立刻删**。
+///
+/// 指令(`<容器>/tmp/window-probe` 的内容):
+///   `report` → 把自己**真实的** `NSWindow.frame` 写进 `<容器>/tmp/window-probe-report`
+///   `set`    → 把窗口挪成「当前几何 + (宽+40, 高+40, x+40, y+30)」,并把**实际**几何写进报告
+///   `clear`  → 清掉记忆键(`window.frame.v1`),报告 `cleared=1`
+/// 三种模式收尾都走 `NSApp.terminate(nil)`:让「退出时落盘」那条真路径也走到,
+/// 顺带把 `alive` 留成 `false`(不会给用户造出一个假的「上次异常退出」弹窗)。
+///
+/// 判据(`Scripts/probe-window-memory.sh`):
+///   `set` 之后重启再 `report`,结果**必须等于** `set` 报出的实际几何(正向);
+///   而 `clear` 之后 `report` **必须不等于**它(负向对照 —— 否则"回到原处"
+///   分不清是记忆生效还是碰巧一样,这正是那个"从不失败的守卫"的形态)。
+///
+/// 不需要探针时:删掉本段 + 根视图 `.onAppear` 里那一处 `#if DEBUG` 调用即可。
+@MainActor
+enum WindowProbe {
+
+    private static let markerName = "window-probe"
+    private static let reportName = "window-probe-report"
+
+    /// 根视图 `onAppear` 时调用;返回是否认到了指令(只用于日志)
+    @discardableResult
+    static func startIfNeeded() -> Bool {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent(markerName)
+        guard let raw = try? Data(contentsOf: marker),
+              let text = String(data: raw, encoding: .utf8) else { return false }
+        // 立刻删标记:残留会让**下一次正常启动**也跑探针(与 demo 场景同一条纪律 ——
+        // 那边更狠,残留的 `demo-quit` 会让 App 起来就自己退出)
+        try? FileManager.default.removeItem(at: marker)
+        let mode = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        Task { @MainActor in
+            guard let window = await visibleWindow() else {
+                writeReport("mode=\(mode) error=no-window")
+                NSApp.terminate(nil)
+                return
+            }
+            switch mode {
+            case "report":
+                // 多等一拍:给 SwiftUI 足够时间把它自己的布局/尺寸做完 ——
+                // 若它会覆盖我们的恢复,这一步就该**看见**(探针的价值在此,
+                // 而不是"喂它一个已经稳了的时刻,然后宣布恢复生效")
+                try? await Task.sleep(for: .seconds(0.8))
+                writeReport("mode=report frame=\(describe(WindowGeometry(rect: window.frame)))")
+            case "clear":
+                WindowFrameStore().clear()
+                writeReport("mode=clear cleared=1")
+            case "set":
+                let target = WindowGeometry(x: window.frame.minX + 40,
+                                            y: window.frame.minY + 30,
+                                            width: window.frame.width + 40,
+                                            height: window.frame.height + 40)
+                window.setFrame(target.rect, display: true)
+                // 停一拍再读数:让 `didMove` 走完(与"用户拖完"同一条码路),
+                // 也避免 AppKit 还在收尾时就报数
+                try? await Task.sleep(for: .seconds(0.8))
+                writeReport("mode=set target=\(describe(target)) "
+                            + "actual=\(describe(WindowGeometry(rect: window.frame)))")
+            default:
+                writeReport("mode=\(mode) error=unknown-mode")
+            }
+            NSApp.terminate(nil)
+        }
+        return true
+    }
+
+    /// 等一个可见窗口出现(最多 6s)。**不写死一次 sleep** —— 窗口出现时刻不固定
+    private static func visibleWindow() async -> NSWindow? {
+        for _ in 0..<20 {
+            if let window = NSApp.windows.first(where: { $0.isVisible }) { return window }
+            try? await Task.sleep(for: .seconds(0.3))
+        }
+        return NSApp.windows.first
+    }
+
+    private static func describe(_ geometry: WindowGeometry) -> String {
+        String(format: "%.0f,%.0f,%.0f,%.0f",
+               geometry.x, geometry.y, geometry.width, geometry.height)
+    }
+
+    private static func writeReport(_ line: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(reportName)
+        try? (line + "\n").write(to: url, atomically: true, encoding: .utf8)
+    }
+}
+#endif
 
 // MARK: - App 生命周期钩子(M4 崩溃采集)
 

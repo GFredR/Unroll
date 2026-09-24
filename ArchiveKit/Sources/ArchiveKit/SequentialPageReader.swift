@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // 为什么存在:ArchiveDocument.data(at:) 每页自建 libarchive 实例(「每页一实例」),
 // 对 solid 7z 是 O(n²) —— 实测 150 页累计 2423ms vs 顺序扫描 34ms(71×),
-// 数据见 Unroll/docs/测试与验证.md §4,工具 Scripts/bench_archive.c。
+// 数据见 工程笔记(未随仓库发布) §4,工具 Scripts/bench_archive.c。
 //
 // 本类持有**单个** struct archive 顺序前进:
 //   · 前向访问(连续翻页/预读):从当前位置继续 next_header,摊销 O(1)/页;

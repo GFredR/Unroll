@@ -220,10 +220,8 @@ Unroll/
 | 文档 | 写了什么 |
 | --- | --- |
 | [`ARCHITECTURE.zh-CN.md`](ARCHITECTURE.zh-CN.md) | 定基调的那几条决策（问题 / 备选 / 选择 / 代价），以及一份「**明确不做的事**」清单 |
-| [`docs/测试与验证.md`](docs/测试与验证.md) | 全部测试、实测与基准：用例数从哪来、每个 fixture 是什么、哪些反向测试抓到过什么 |
-| [`docs/发布清单.md`](docs/发布清单.md) | 发布前逐项要过的清单：产物溯源校验、身份隔离、以及只能由人拍板的那些项 |
 
-本仓库的深水区笔记是**中文单语**的（上面三份里的后两份；架构文档两种语言都有）。英文侧对应 [ARCHITECTURE.md](ARCHITECTURE.md)（English）。
+架构文档两种语言都有：[ARCHITECTURE.md](ARCHITECTURE.md)（English）。截图与演示录屏在 [`docs/`](docs/)。
 
 ## 支持这个项目
 

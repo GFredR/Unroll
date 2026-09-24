@@ -12,7 +12,7 @@
 #   于是只剩 `kill -TERM` —— 但信号走的是**异常**分支：进程被直接终结，
 #   `applicationWillTerminate` 根本不会被调用，`session.json` 停在 `alive=true`。
 #   它证明的恰恰是「异常退出下能被检出」，与「优雅退出会收尾」**方向相反**，
-#   两条证据不能互相顶替（见 docs/测试与验证.md §11.5）。
+#   两条证据不能互相顶替（见 工程笔记(未随仓库发布) §11.5）。
 #
 # 怎么绕过的:不去绕 —— 让 **App 自己**发起退出。`DemoDriver` 的 `demo-quit` 场景
 #   经**响应者链**发 `terminate:`（`NSApp.sendAction(#selector(NSApplication.terminate(_:)),

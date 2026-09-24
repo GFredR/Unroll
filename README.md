@@ -219,10 +219,8 @@ The reasoning behind these boundaries — and the decisions that shaped them —
 | Document | What's in it |
 | --- | --- |
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | The decisions that set the tone — problem / alternatives / choice / cost — plus a table of what was deliberately **not** built |
-| [`docs/测试与验证.md`](docs/测试与验证.md) (Chinese) | Every test, measurement and benchmark: where the test counts come from, what each fixture is, and which reverse tests caught what |
-| [`docs/发布清单.md`](docs/发布清单.md) (Chinese) | The pre-release checklist: artifact provenance checks, identity hygiene, and the items only a human can sign off |
 
-The two `docs/` files are **Chinese-only** — the deeper engineering notes in this repository are written in Chinese. The architecture doc ships in both languages: [简体中文](ARCHITECTURE.zh-CN.md).
+The architecture doc ships in both languages: [简体中文](ARCHITECTURE.zh-CN.md). Screenshots and the demo recording live in [`docs/`](docs/).
 
 ## Support this project
 
