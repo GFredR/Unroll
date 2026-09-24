@@ -1,8 +1,9 @@
 # Changelog
 
-## 未发布 / Unreleased — 2026-09-23 两批（网格默认层 + 阅读层周边控件）与 2026-09-24 三批（工程与发布链加固 + 窗口记忆取证 + 窗口记忆落地 & 最小窗口 900×600）
+## 1.2.1 — 2026-09-24 · 自管窗口记忆 + 网格默认层 + 阅读层周边控件 + 发布链加固（1.2.0 冻结后攒下的 5 批）/ Window memory, grid-as-default-layer, reader chrome, release-chain hardening
 
-> ⚠️ 下列改动落在 `1.2.0` 冻结（产物 tip `34bedb2`、`v1.2.0` tag）**之后**，**不在 1.2.0 的产物里**，也**没有升版本号**。下一次发版时应并入对应的版本段，并随那次一起重出产物。
+> 下面 5 批改动都落在 `1.2.0` 冻结（产物 tip `171fb6c`、`v1.2.0` tag）**之后**，本版把它们一起收进来并**重出产物** —— 1.2.0 的 DMG 里没有这些。
+> ⚠️ 本版发布前对历史做过一次清理（把两份只面向作者本人的工程笔记从全部历史里移出），因此**本仓库的提交编号与清理前不一致**；仓库当时从未推送、无协作者，清理无副作用。
 
 ### 网格从浮层面板变成打开后的默认层
 
@@ -46,7 +47,7 @@
 - **优雅退出链路首次在本机取证成功**（`Scripts/probe-graceful-exit.sh`）：此前从外面发 ⌘Q 要经 Apple Events，而 ad-hoc 重签后该授权在 TCC 里失效（实测 `-10004`），只能拿"强杀会被检出"当替代证据 —— 而那与"优雅退出会收尾"是**方向相反**的两件事。现在由 `DemoDriver` 的 `demo-quit` 场景经**响应者链**发 `terminate:`（与菜单里「退出 Unroll」项逐字同路），断言磁盘效果（`session.json` 的 `alive=false` + 面包屑末条 `appTerminated`），另配 `MODE=abnormal` 反向对照证明这两条断言**当场会红**
 - 实测：Debug 版 `demo-quit` 走通、`alive=false` + `appTerminated` 两条判据全绿；`MODE=abnormal`（强杀）下两条**全红**。整条构建链在 `/tmp` 里另跑一遍 rc=0（两条抽出的守卫在真实构建里都通过）
 - ⚠️ 已知仍未覆盖：**「关窗口」是否真的会退出 App**。代码里**没有实现** `applicationShouldTerminateAfterLastWindowClosed`，按 AppKit 默认关掉最后一个窗口**不会**退出 —— 因此 `UnrollApp.swift` 注释里「⌘Q / 关窗口」的后半截**存疑**（已登记）
-- 单元测试**数量不变**（337 用例 / 335 通过 / 2 skip / 0 失败 —— **该批当时**计数；同日第二批补 1 例后为 338 / 336，见下）—— 本批新增的全是 shell 脚本级的反向测试
+- 单元测试**数量不变**（337 用例 / 333 通过 / 4 skip / 0 失败 —— **该批当时**计数；同日第二批补 1 例后为 338 / 334，见下）—— 本批新增的全是 shell 脚本级的反向测试
 
 **English**
 - **Closed a real hole in the artifact↔source check (`dirty`)**: `build-app.sh` computed `dirty` with `git status --porcelain --untracked-files=no`, so **untracked files did not count as dirty**. Because `project.yml`'s `sources` are directory-level and the build runs `regen.sh` first, a brand-new `.swift` that was never `git add`ed **did get compiled into the binary** while the sidecar still said `dirty=0`. Untracked files now count as dirty (extracted into `Scripts/git-tree-state.sh` so it can be reverse-tested).
@@ -56,7 +57,7 @@
 - **The graceful-quit path is now verified on this machine** (`Scripts/probe-graceful-exit.sh`). Sending ⌘Q from outside goes through Apple Events, and that authorization is invalidated in TCC after ad-hoc re-signing (measured `-10004`), so the only evidence used to be "a hard kill is detected as a crash" — which is the **opposite** direction from "a graceful quit closes the session". A new `DemoDriver` scene (`demo-quit`) now sends `terminate:` through the **responder chain** (the same path the "Quit Unroll" menu item uses, character for character), and the script asserts the on-disk effect (`alive=false` in `session.json`, with `appTerminated` as the last breadcrumb). A `MODE=abnormal` control run proves those two assertions **do go red**.
 - Measured: the Debug `demo-quit` run passes both disk assertions, and the `MODE=abnormal` (hard kill) run fails both. The whole build chain was also re-run into `/tmp` (rc=0), confirming both extracted guards fire inside a real build.
 - ⚠️ Still not covered: **whether closing the window really quits the app**. The app does **not** implement `applicationShouldTerminateAfterLastWindowClosed`, and AppKit's default for that optional method is `false` — so closing the last window does **not** quit, which makes the "⌘Q / close window" wording in `UnrollApp.swift` questionable in its second half (logged).
-- The unit-test **count is unchanged** (337 cases / 335 passed / 2 skipped / 0 failed — the **count at that point**; a second batch the same day added 1 case, taking it to 338 / 336, see below) — everything added in this batch is shell-level reverse testing.
+- The unit-test **count is unchanged** (337 cases / 333 passed / 4 skipped / 0 failed — the **count at that point**; a second batch the same day added 1 case, taking it to 338 / 334, see below) — everything added in this batch is shell-level reverse testing.
 
 ### 窗口尺寸/位置记忆取证 + 续读落点定案（2026-09-24 第二批）—— App 行为不变
 
@@ -65,16 +66,16 @@
 - **新增取证脚本 `Scripts/probe-window-memory.sh`**：判据是同一个二进制连启两次、frame 键会不会复用（实测 **20 → 21 → 22**，每次启动各新增一个 ⇒ 不复用 ⇒ 记忆不生效）。与 `probe-graceful-exit.sh` 同族，但默认指向**冻结产物**（这条验的是"发出去的东西有没有记忆"，属产物侧）
 - **续读落点定案（方案 B）**：续读与"打开即网格"两个愿望正面相顶（前者＝回到上次模式与页码，后者＝打开先看目录）。定为：**续读只恢复页码与版式，不自动进阅读层** —— 打开先给人看目录，而页码已经停在续读位置，点任意一格就从那儿读。另两条走法被否：A（不改编读语义）与"打开即网格"直接打架；C（加偏好开关）为一个二元选择多一个设置项，不划算
 - **新增 1 条单元测试把这个落点钉死**（`testResumeLandsOnGridLayerNotReader`，App 宿主 242 → 243、全量 337 → 338）：先写入"第 2 页"的进度记录，再打开，断言 `pageIndex == 2`（续读生效）**且** `layer == .browse`（不自动进阅读层）。此前的用例用的是**全新 VM**（无进度记录），验不到"有续读记录时落在哪"。**反向注入实测**：在续读段插入 `layer = .read` ⇒ **只有这一条断言红**，同 suite 其余 14 条仍全绿；还原后 `git diff` 为空
-- 实测：全量 **338 用例 / 336 通过 / 2 skip / 0 失败**，Debug 零警告、Release 全量构建零源码级警告
-- ⚠️ ~~一条**未解释的观察**：探针启动写入的键值是 `900x508`，而其它历史键全是 `960×640`；508 低于代码里声明的最小高度 600~~ ⇒ **同日第三批已结案：不是缺陷**。拿旧二进制的实际几何去比**当前源码**里声明的最小值，是苹果比橘子 —— `git show 34bedb2:Unroll/App/UnrollApp.swift` 显示冻结产物只有 `.frame(minWidth: 720, minHeight: 480)`、也没有 `.defaultSize`（`Core/DesignSystem.swift` 在那个提交还不存在），`508` 对一个声明最小高 `480` 的版本完全合法
+- 实测：全量 **338 用例 / 334 通过 / 4 skip / 0 失败**，Debug 零警告、Release 全量构建零源码级警告
+- ⚠️ ~~一条**未解释的观察**：探针启动写入的键值是 `900x508`，而其它历史键全是 `960×640`；508 低于代码里声明的最小高度 600~~ ⇒ **同日第三批已结案：不是缺陷**。拿旧二进制的实际几何去比**当前源码**里声明的最小值，是苹果比橘子 —— `git show 171fb6c:Unroll/App/UnrollApp.swift` 显示冻结产物只有 `.frame(minWidth: 720, minHeight: 480)`、也没有 `.defaultSize`（`Core/DesignSystem.swift` 在那个提交还不存在），`508` 对一个声明最小高 `480` 的版本完全合法
 
 **English**
 - **Corrected a conclusion that had been written twice: the window's size/position memory has never worked.** Earlier docs (this file included, plus a comment in `UnrollApp.swift`) claimed "the memory overrides the new default size, so existing users never see 960×640". Checking the container's preference file key by key showed that SwiftUI derives frame keys containing a **one-off code address** (`...ModifiedContent<(unknown context at $10b1fce30).WindowChrome>...`), so **every launch produces a new key** and the system can never read "last time"; the `Saved Application State/` directory is **empty** as well (the second restore path does not exist either). The conclusion therefore **flips**: `.defaultSize` applies on every launch (the new default reaches **all** users immediately), and the real problem is that **a window the user resized or moved is not remembered** — a missing feature, logged for a decision.
 - **New probe script `Scripts/probe-window-memory.sh`**: it asks whether the same binary reuses its frame key across two launches (measured **20 → 21 → 22** — one new key each time, so it is not reused, so memory is not working). Same family as `probe-graceful-exit.sh`, but it defaults to the **frozen artifact** — this one asks "does the thing we ship remember?", which is artifact-side.
 - **Resume behaviour settled (option B)**: resuming and "opening lands on the grid" pull in opposite directions (one restores the last mode and page, the other says show the contents first). The decision: **resuming restores the page and the layout but does not enter the reader automatically** — you are shown the contents first and the page is already parked where you left off, so clicking any cell starts there. The other two options were rejected: A (leave resume semantics alone) fights "opening lands on the grid", and C (a preference switch) adds a setting for a binary choice.
 - **One new unit test nails that landing down** (`testResumeLandsOnGridLayerNotReader`, app-hosted 242 → 243, total 337 → 338): it writes a "page 2" progress record, opens the archive, and asserts `pageIndex == 2` (resume works) **and** `layer == .browse` (no automatic entry into the reader). The earlier case used a **fresh view model** with no progress record, so it could not see this path. **Reverse-injection check**: inserting `layer = .read` into the resume branch turns **only that one assertion** red while the other 14 in the suite stay green; `git diff` is empty after reverting.
-- Measured: **338 cases / 336 passed / 2 skipped / 0 failed**, zero warnings in Debug and a full zero-source-warning Release build.
-- ⚠️ ~~One **unexplained observation**: the probe's key holds `900x508` while every other historical key holds `960×640`, and 508 is below the 600 minimum height declared in code~~ ⇒ **settled by the third batch the same day: not a defect.** Comparing an old binary's actual geometry against a minimum declared in **current source** is apples to oranges — `git show 34bedb2:Unroll/App/UnrollApp.swift` shows the frozen artifact only had `.frame(minWidth: 720, minHeight: 480)` and no `.defaultSize` (`Core/DesignSystem.swift` did not exist at that commit), and `508` is perfectly legal for a build whose declared minimum height is `480`.
+- Measured: **338 cases / 334 passed / 4 skipped / 0 failed**, zero warnings in Debug and a full zero-source-warning Release build.
+- ⚠️ ~~One **unexplained observation**: the probe's key holds `900x508` while every other historical key holds `960×640`, and 508 is below the 600 minimum height declared in code~~ ⇒ **settled by the third batch the same day: not a defect.** Comparing an old binary's actual geometry against a minimum declared in **current source** is apples to oranges — `git show 171fb6c:Unroll/App/UnrollApp.swift` shows the frozen artifact only had `.frame(minWidth: 720, minHeight: 480)` and no `.defaultSize` (`Core/DesignSystem.swift` did not exist at that commit), and `508` is perfectly legal for a build whose declared minimum height is `480`.
 
 ### 窗口尺寸/位置记忆真正落地（方案 A：自管存储）+ 最小窗口 900×600（2026-09-24 第三批）—— 用户可见行为有变
 
@@ -87,9 +88,10 @@
 - **探针重写**（`Scripts/probe-window-memory.sh`）：`BASE` → `set` 得 `T1`（先断言 `T1 ≠ BASE`，证明**判据有区分度**）→ 重启后 `report` 必须 `== T1`；再 `set` 得 `T2` → 重启必须 `== T2` **且 `≠ T1`**（反向对照：这才分得清"记忆生效"与"每次都回到某个固定值"）。实测 `rc=0`。**反向注入**（注释掉 `window.setFrame(restored.rect, display: true)`）⇒ 探针精准报红 `✗ 重启后几何（AGAIN）= 544,267,960,640 ≠ T1（584,297,1000,680）⇒ 记忆没有被恢复`；还原后 `git diff` 无残留。旧判据保留在 `MODE=legacy`（它默认指向**冻结产物**，问的是"发出去的那个二进制有没有记忆"）
 - **判据只看 App 自己报出来的窗口几何，不读我们自己的存储键** —— 读自己的键是循环论证（`cfprefsd` 有缓存，最多只能证明"写进去了"，证明不了"恢复生效了"）
 - **最小窗口 880×600 → 900×600**（用户指定，只动宽度）：缩略图栏占位后画布回到 788。`AppSkeletonTests` **一个字没改** —— 它锁的是**关系**（`minWidth − railWidth ≥ 720`）不是数值
-- 实测：全量 **355 用例 / 353 通过 / 2 skip / 0 失败**，Debug 零警告、Release 全量构建零源码级警告
+- 实测：全量 **355 用例 / 351 通过 / 4 skip / 0 失败**，Debug 零警告、Release 全量构建零源码级警告
+- ⚠️ **计数更正（本批发现）**：此前多处记的「2 skip」**统计漏了 2 个**。实测 4 个 skip 各有明确原因 —— 2 个是 opt-in 的（外部样本要 `UNROLL_EXTERNAL_SAMPLES`、合成基准要 `UNROLL_BENCH_FIXTURE`），另 2 个是**测试宿主的硬限制**（`RecentDocumentsTests` 造不出 security-scoped 书签）。原记录 `335 + 2 = 337` 与更正后的 `333 + 4 = 337` **两种写法都自洽** —— 所以从表面完全看不出错。**自洽的错误计数是最会骗人的一种**，本项目已经反复撞到同一形状的坑
 - ⚠️ **未覆盖**：`didEndLiveResize` 那条写入时机**从没被驱动过**（注入窗口拖拽同样被 TCC 拦）；多屏 / 拔外接屏只有单测；"位置夹取会把**故意摆到屏外一半**的窗口拉回屏内"这条取舍没在真屏上手过
-- ⚠️ **旧产物（1.2.0 @ `34bedb2`）不含本批** —— 900×600 与窗口记忆都要**升版本号重出产物**才对用户生效
+- ⚠️ **1.2.0 的旧产物不含本批** —— 900×600 与窗口记忆是随 **1.2.1** 重出产物之后才对用户生效
 
 **English**
 - **The feature the previous batch proved had never worked is now actually built.** All three system routes are closed (`setFrameAutosaveName` never produced a key; SwiftUI's derived frame key contains a **one-off code address**, so every launch is a new key; `Saved Application State/` is empty), so the memory is now **self-managed**: one fixed key, `window.frame.v1`, holding four numbers as JSON (`Core/WindowGeometry.swift`). **No paths and no archive names** — the privacy baseline is unchanged (this app makes no network calls).
@@ -100,15 +102,30 @@
 - **The probe was rewritten** (`Scripts/probe-window-memory.sh`): `BASE` → `set` gives `T1` (assert `T1 ≠ BASE` first, which proves the **criterion discriminates**) → after a restart `report` must equal `T1`; then `set` gives `T2` → after a restart it must equal `T2` **and differ from `T1`** (a control that separates "the memory works" from "every launch lands on some fixed value"). Measured `rc=0`. **Reverse injection** (commenting out `window.setFrame(restored.rect, display: true)`) makes the probe fail precisely: `✗ geometry after restart (AGAIN) = 544,267,960,640 ≠ T1 (584,297,1000,680) ⇒ the memory was not restored`; `git diff` is clean after reverting. The old criterion is kept under `MODE=legacy` (it defaults to the **frozen artifact** and asks "does the thing we ship remember?").
 - **The criterion reads only the geometry the app reports for itself, never our own storage key** — reading our own key would be circular (`cfprefsd` caches, so at best it proves "it was written", never "it took effect on restore").
 - **Minimum window 880×600 → 900×600** (user-specified, width only): after the thumbnail rail takes its place, the canvas is back to 788. `AppSkeletonTests` **did not change by a character** — it locks a **relationship** (`minWidth − railWidth ≥ 720`), not a value.
-- Measured: **355 cases / 353 passed / 2 skipped / 0 failed**, zero warnings in Debug and a full zero-source-warning Release build.
+- Measured: **355 cases / 351 passed / 4 skipped / 0 failed**, zero warnings in Debug and a full zero-source-warning Release build.
+- ⚠️ **Count correction (found in this batch)**: the "2 skipped" recorded earlier **had missed two**. All four have a concrete reason — two are opt-in (external samples need `UNROLL_EXTERNAL_SAMPLES`, the synthetic benchmark needs `UNROLL_BENCH_FIXTURE`), and two are a **hard limit of the test host** (`RecentDocumentsTests` cannot mint security-scoped bookmarks). The old record `335 + 2 = 337` and the corrected `333 + 4 = 337` are **both self-consistent** — which is exactly why the error stayed invisible. **A self-consistent wrong count is the most deceptive kind**, and this project keeps hitting that same shape.
 - ⚠️ **Not covered**: the `didEndLiveResize` write moment **has never been driven** (injecting a window drag is refused by TCC as well); multi-screen and unplugged-display behaviour is unit-tested only; and the trade-off that a window **deliberately left half off-screen** is pulled back into view has not been exercised on a real display.
-- ⚠️ **The current artifact (1.2.0 @ `34bedb2`) does not contain this batch** — both 900×600 and the window memory need a **version bump and a rebuild** before users see them.
+- ⚠️ **The 1.2.0 artifact does not contain this batch** — both 900×600 and the window memory only reach users once **1.2.1** is built.
+
+### 发布范围调整：两份内部工程笔记移出仓库（2026-09-24 第三批）
+
+**中文**
+- 本仓库现在只包含**面向读者**的内容。`docs/测试与验证.md`（内部测试台账）与 `docs/发布清单.md`（内部发布 SOP）属**内部工程笔记**：已从索引移出、加进 `.gitignore`（**本地文件保留**），并**从全部历史里抹掉**。⚠️ 只加 `.gitignore` 是不够的 —— 它们落进 40 / 22 笔提交，`git show <旧提交>:<路径>` 照样能读到全文
+- 同步清掉 **12 处文档引用**（README 双语各 2、ARCHITECTURE 双语各 2、CHANGELOG 4）与 **6 处源码/脚本注释里的引路**（`PageStore.swift` / `SequentialPageReader.swift` / `verify-ui.sh` / `test-release-guards.sh` / `probe-graceful-exit.sh` / `pw_probe.c`）—— 读者不该被送去追一个拿不到的文档
+- 抹历史用的是 `git filter-repo`。⚠️ 两个坑：① 它**在旧运行痕迹存在时会弹交互提问**（`.git/filter-repo/already_ran`），没有 stdin 就卡住被 kill、退出码 `137` —— 看起来像沙箱拦截，其实不是；② 它会**剪掉变空的提交**，所以提交数 **74 → 65**（不是「文件没了、笔数不变」）
+- ⚠️ **判据（泄漏扫描第三通道）**：扫**全部 984 个对象 / 539 个 blob**（含 dangling 与二进制）搜那两份文档的特征串 → **0 命中**。只按路径 `git log -- <path>` 查不够 —— 那只能证明「树里没有」
+
+**English**
+- This repository now contains **reader-facing content only**. `docs/测试与验证.md` (the internal test ledger) and `docs/发布清单.md` (the internal release SOP) are **internal engineering notes**: dropped from the index, added to `.gitignore` (**local copies kept**), and **erased from the entire history**. ⚠️ `.gitignore` alone is not enough — they appear in 40 and 22 commits, so `git show <old-commit>:<path>` would still print them in full.
+- **12 documentation references** were removed, along with **6 pointers inside source and script comments** (`PageStore.swift`, `SequentialPageReader.swift`, `verify-ui.sh`, `test-release-guards.sh`, `probe-graceful-exit.sh`, `pw_probe.c`) — no reader should be sent chasing a document they cannot obtain.
+- The rewrite used `git filter-repo`. ⚠️ Two traps: ① it **prompts interactively when a stale run marker exists** (`.git/filter-repo/already_ran`); with no stdin it hangs and is killed, surfacing as exit code `137` — which looks like a sandbox denial, but is not; ② it **prunes commits that become empty**, so the commit count went **74 → 65** (not "the files are gone, the count is unchanged").
+- ⚠️ **The criterion (third leak-scan channel)**: scan **all 984 objects / 539 blobs** — dangling and binary included — for the two documents' characteristic strings → **0 hits**. Querying by path (`git log -- <path>`) is not enough; that only proves "the trees no longer contain it".
 
 ## 1.2.0 — 2026-09-23 · 首次公开发布 / First public release
 
 > **本版是实际对外公开的第一个版本。** `v1.0.0` / `v1.0.1` / `v1.1.0` 三个标签都只在本机打过、**从未推送过**（仓库此前没有远程）；其中 1.1.0 曾在本机构建并冻结过产物。本版在那一版之上补了下面这组**可发现性**改动；功能不变的部分见下面各段。
 >
-> **发布状态（2026-09-23 冻结）**：产物已按 `34bedb2` 重建（App **2.4 MB** / DMG **1036 KB**，Universal 2，ad-hoc 签名），`v1.2.0` tag 已打，`publish.sh` 前检**只剩「未登录 `gh`」一项** —— 之前那两条设计红（`[4/8]` tag 之后还有源码改动 / `[5/8]` 产物不是当前源码构建的）已随这次升版一并转绿。**尚未推送**（仓库当前没有远程）。产物与自身哈希自洽：`dirty=0`、侧车 `commit` == `git log -1 -- ARTIFACT_PATHS`、侧车哈希 == DMG 实测哈希 —— 三个判据由 `Scripts/publish.sh` 的前检自报，逐项输出见该脚本的运行记录。
+> **发布状态（2026-09-23 冻结）**：产物已按 `171fb6c` 重建（App **2.4 MB** / DMG **1036 KB**，Universal 2，ad-hoc 签名），`v1.2.0` tag 已打，`publish.sh` 前检**只剩「未登录 `gh`」一项** —— 之前那两条设计红（`[4/8]` tag 之后还有源码改动 / `[5/8]` 产物不是当前源码构建的）已随这次升版一并转绿。**尚未推送**（仓库当前没有远程）。产物与自身哈希自洽：`dirty=0`、侧车 `commit` == `git log -1 -- ARTIFACT_PATHS`、侧车哈希 == DMG 实测哈希 —— 三个判据由 `Scripts/publish.sh` 的前检自报，逐项输出见该脚本的运行记录。
 
 **可发现性三件套** —— 补上三处「东西在、但没人找得到」的空档。菜单栏里有 23 条带快捷键的命令，但发现它们的唯一途径是翻菜单栏；冷启动的空窗口什么提示都没有；而**画布手势**（点左右半屏、滑动翻页、双击缩放）是菜单里根本不存在的东西，更没有入口。三个展示面各面向一个时机，内容刻意不重叠：
 
@@ -162,7 +179,7 @@
 - **封面单独一页**(⌥⌘C):日式单行本的封面是独立一页,开着才是正确的跨页配对(0 | 1-2 | 3-4);旧实现把配对写死成 0-1 / 2-3,每翻一摊都错位一面
 - **续读记忆**:每本记住页码、单双页、左右开与缩放档位,重开自动回到原处(按「文件名 + 文件大小」认档,不存路径)
 - **书签**:⌘D 标记当前页,⌥⌘↑/↓ 在书签间跳转(到端点绕回),书签菜单可直达某一页
-- **跳转到页**:⌥⌘G 输入页码直达;窗口大小与位置自动记忆 ⚠️ —— **后半句在 1.2.0 里不成立**（2026-09-24 取证：窗口尺寸/位置记忆**从来没有生效过**，键名含一次性代码地址 ⇒ 每次启动都是新键）。同日第三批已**改为自管存储真做出来**，会在**下一个版本**里首次对用户生效 —— 两批的经过见本文件「未发布」段 2026-09-24 第二、三批
+- **跳转到页**:⌥⌘G 输入页码直达;窗口大小与位置自动记忆 ⚠️ —— **后半句在 1.2.0 里不成立**（2026-09-24 取证：窗口尺寸/位置记忆**从来没有生效过**，键名含一次性代码地址 ⇒ 每次启动都是新键）。同日第三批已**改为自管存储真做出来**，会在**下一个版本**里首次对用户生效 —— 两批的经过见本文件 1.2.1 段 2026-09-24 第二、三批
 - **另存当前页**(⌘S):存成 PNG 或 JPEG;**双页模式下导出的是屏幕上那一整摊**(按当前阅读方向并排),不是单页。建议文件名带归档名与补零页号(`vol01-p003.png`),排出来就是阅读顺序
 - **进度条可拖动**(HUD):拖动中页码跟着变,松手才跳页 —— 不是每挪一格就解码一次
 - **窗口标题带页码**(`文件名 · P.3/200`)+ ⇧⌘F「在访达中显示」:多窗口与 Dock 悬停能分辨读到哪,接着看下一卷不用重新找文件
@@ -186,7 +203,7 @@
 - **Cover on its own page** (`⌥⌘C`): manga volumes keep the cover on a page of its own, which is what makes spreads pair up correctly (0 | 1-2 | 3-4); the old fixed pairing was 0-1 / 2-3 and shifted every spread by one page
 - **Resume**: remembers the page, single/two-page layout, reading direction and zoom mode per archive (identified by file name + size, no path stored)
 - **Bookmarks**: `⌘D` to mark the current page, `⌥⌘↑` / `⌥⌘↓` to jump between them (wrapping at the ends), with a menu to jump straight to a marked page
-- **Go to page** (`⌥⌘G`); window size and position are remembered too ⚠️ — **the second half does not hold in 1.2.0** (verified 2026-09-24: window size/position memory has **never worked**; the derived key contains a one-off code address, so every launch is a new key). The third batch the same day **rebuilt it on self-managed storage**, and it will first reach users in the **next release** — both batches are written up under "Unreleased".
+- **Go to page** (`⌥⌘G`); window size and position are remembered too ⚠️ — **the second half does not hold in 1.2.0** (verified 2026-09-24: window size/position memory has **never worked**; the derived key contains a one-off code address, so every launch is a new key). The third batch the same day **rebuilt it on self-managed storage**, and it will first reach users in the **next release** — both batches are written up under the 1.2.1 section.
 - **Save the current page** (`⌘S`) as PNG or JPEG. In two-page mode it writes **the whole spread you are looking at** (side by side, in your reading direction) rather than one isolated page. The suggested file name carries the archive name and a zero-padded page number (`vol01-p003.png`), so the exports sort in reading order
 - **Draggable progress bar** (HUD) — the page number follows your drag and it jumps when you let go, instead of decoding a page for every step
 - **Page number in the window title** (`file name · P.3/200`) plus `⇧⌘F` "Show in Finder" — multiple windows and Dock hover tell you where you are, and moving on to the next volume no longer means hunting for the file
