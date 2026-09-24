@@ -29,7 +29,17 @@ final class PageSequenceExportTests: XCTestCase {
         .appendingPathComponent("ArchiveKit/Tests/Fixtures")
 
     /// 导出目标目录(临时)—— 每例现建现删,不留到下一轮
-    private var directory: URL!
+    ///
+    /// ⚠️ `nonisolated(unsafe)` 是**为了跨工具链编译**,不是随手加的:
+    ///    本类整体是 `@MainActor`,而 `setUpWithError` / `tearDownWithError` 重写的是
+    ///    XCTest 的**非隔离**方法 —— Swift 6.2(Xcode 26)允许这种重写继承类型的隔离,
+    ///    Swift 6.0(Xcode 16.4)不允许,于是同一个属性一边能碰、一边报
+    ///    "main actor-isolated property 'directory' can not be mutated from a
+    ///     nonisolated context"。CI 首次在真实 runner 上跑就撞上了(那边是 Xcode 16.4,
+    ///    本机是 26.1,所以本机从未复现)。
+    ///    该值只在 setUp 写、tearDown 读、各用例内读,全部在测试线程上顺序发生,
+    ///    没有并发访问 —— 去掉隔离在这条用途上是安全的。
+    private nonisolated(unsafe) var directory: URL!
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory
