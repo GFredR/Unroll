@@ -317,8 +317,16 @@ fi
 # message**,所以它天然是盲区。用的是同一个 PATTERN,扫 `%B` 全文(不只 subject)。
 # ⚠️ 命中时**只报哈希与日期、不报内容** —— 把命中行打出来正好是把要防的
 #    东西显示到终端/CI 日志里,守卫自己完成一次泄漏。
+# ⚠️ set +e / set -e 必须包住这条赋值 —— 本脚本开头是 `set -e`，而 `VAR="$(cmd)"`
+#    的退出码**就是 cmd 的退出码**：扫描脚本一旦返回非 0（命中，或前置不满足），
+#    set -e 会在这一行直接终止整个脚本，下面那个 `MSG_RC=$?` 永远执行不到。
+#    实测（2026-09-24）：提交消息真命中了一次，本应打印"有提交消息命中泄漏关键词"，
+#    实际终端上一个字都没有 —— 前检在第 6 步静默死亡，连 [7/8] 与汇总行都不打印。
+#    失效形态很恶劣：守卫**只在它抓到东西的那一刻**变成哑巴，其余时候一切正常。
+set +e
 MSG_OUT="$(Scripts/scan-commit-messages.sh "$PATTERN" 2>&1)"
 MSG_RC=$?
+set -e
 if [ "$MSG_RC" -eq 0 ]; then
     ok "提交消息未命中($(git rev-list --count HEAD) 条,含多行正文)"
 elif [ "$MSG_RC" -eq 1 ]; then
@@ -334,8 +342,11 @@ fi
 # (PNG 元数据 / 被编进产物的 .strings / 工具链刻进二进制的本机路径)。
 # 这两种泄漏事后都删不掉,只能 filter-repo 重写历史,所以必须挡在 push 之前。
 # 扫描口径与"为什么不回显内容/路径"见 Scripts/scan-history-blobs.sh。
+# 同上：这条赋值也必须 set +e 包住，否则命中时脚本在这一行静默终止。
+set +e
 HIST_OUT="$(Scripts/scan-history-blobs.sh "$PATTERN" . 2>&1)"
 HIST_RC=$?
+set -e
 if [ "$HIST_RC" -eq 0 ]; then
     # blob 数从扫描输出里取,不写死 —— 写死的数字会在下一次内容变化后变成假信息,
     # 而"有出处、其实过期"的数字比一个明显的错数字更难被发现(本项目的老教训)。
