@@ -416,7 +416,10 @@ cat <<'EOF'
   2. 界面验收取证:./Scripts/verify-ui.sh
      自动拍三张截图(空态 / 崩溃询问 / dmg 布局)到 docs/,**需要人做的只是看一眼**。
      能自动拍的是"它长什么样";拍不出来的是"这文案是否得体",那仍得人判断。
-  3. 200 页连翻的内存与掉帧(决定是否要走 AppKit Plan B)—— 体感类,只能人跑
+  3. 200 页连翻的"手感" —— ⚠️ **内存那一半已有机器判据**(两条无头基准 + 一条三池之和
+     守卫,200 页包实测联合峰值 0.05GB vs 验收线 1.5GiB,见 docs/测试与验证.md §9 / §25;
+     要跑得先让 UNROLL_BENCH_FIXTURE 指向样本,默认 skip);**仍要人眼的只剩掉帧 / 跟手**
+     (决定是否要走 AppKit Plan B)
   4. GitHub 网页侧:仓库描述与 Topics 是否正常;以及
      Settings → Emails → "Block command line pushes that expose my email" 已勾选
 EOF
