@@ -224,4 +224,44 @@ final class AppSkeletonTests: XCTestCase {
         XCTAssertGreaterThan(Window.defaultWidth, Window.minWidth)
         XCTAssertGreaterThan(Window.defaultHeight, Window.minHeight)
     }
+
+    /// **三池之和**必须也在守卫之内(2026-09-28)。
+    ///
+    /// 上面几条各自锁住了「每一个池子」,但三池是**同时在位**的,不是三选一 ——
+    /// 而到这天为止**没有任何东西约束它们的和**。这不是理论推演:
+    /// `ReaderViewModel.openDocument` 里 `showGrid()`(启动全卷扫描)与
+    /// `loadPage(startPage)`(首屏全分辨率 + 预读)是**并发**的,打开归档那一刻
+    /// 网格池与全分辨率池会一起长起来。
+    ///
+    /// 这条守卫防的是一个**没有报错、没有日志、每条既有断言都还是绿的**坏状态:
+    /// 把 `maxThumbnailPixels` 从 2000 万爬到 4500 万,上面那几条全过(它仍
+    /// ≥ 两张最坏缩略图、仍 < `maxPixels / 4`),而三池之和已经吃掉验收线的
+    /// 三分之二 —— 留给「不在这三条账里」的开销就只剩不到三分之一。
+    /// 那种坏状态只能靠这条抓到
+    func testThreePoolsSumLeavesRoomOutsideThePools() {
+        typealias Budget = DesignSystem.PageBudget
+        // 本项目所有位图都是 RGBA8(premultipliedLast)—— DesignSystem 自己的
+        // 换算也是这个口径(它的注释里写着「20 Mpx ≈ 80 MB」)
+        let bytesPerPixel: Int64 = 4
+
+        let poolPixels = Budget.maxPixels
+            + Budget.maxThumbnailPixels
+            + Budget.maxGridThumbnailPixels
+        let poolBytes = Int64(poolPixels) * bytesPerPixel
+
+        // ① 三池之和必须**吃不下**验收线的 2/3。剩下的那 1/3 是留给账本之外的开销:
+        //    libarchive 的扫描缓冲、`PageCache` 「先解码、再 trim」造成的单页瞬态
+        //    (那一刻峰值 = 池 + 正在解的那一张)、SwiftUI/AppKit 自己。
+        //    这些都没有预算账本,只能靠留白 —— 留白不足时验收线会被别的东西撞破,
+        //    而三条池子断言一条都不会响
+        XCTAssertLessThanOrEqual(poolBytes * 3, MemoryAcceptanceLine.bytes * 2,
+                                 "三池之和 \(poolBytes / 1_048_576)MB 已占验收线的三分之二以上,"
+                                 + "账本之外的开销(扫描缓冲 / 单页瞬态解码 / 框架自身)没有余量了")
+
+        // ② 两个「垫图池」之和不得超过主池的一半 —— 否则垫图开销与「真正在看的
+        //    那几页」等量级,「垫图」这个定位就不成立了
+        XCTAssertLessThan(Budget.maxThumbnailPixels + Budget.maxGridThumbnailPixels,
+                          Budget.maxPixels / 2,
+                          "两个垫图池之和已逼近全分辨率池的量级 —— 它们只是垫图")
+    }
 }
