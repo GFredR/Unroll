@@ -31,9 +31,10 @@ struct UnrollApp: App {
     /// 「帮助 → 键盘快捷键…」面板(2026-09-22)
     @State private var isShortcutSheetPresented = false
 
-    /// 项目主页。⚠️ **仓库尚未 push**(唯一阻塞是 `gh` 未登录,见发布清单 §2)——
-    /// 首推之前点这一项会拿到 404。这是**已知且刻意**的:地址就是 `publish.sh`
-    /// 将要创建的 `GFredR/Unroll`,不写成占位符也不留 TODO(仓库零 TODO 纪律)
+    /// 项目主页。✅ **仓库已发布**(`GFredR/Unroll`,public;2026-09-24)。
+    /// ⚠️ 原文写着「仓库尚未 push …… 首推之前点这一项会拿到 404」—— 那是**否定式声明**,
+    ///    2026-09-24 发布当刻就已过期。这正是本项目记过的那一类:否定句没人会回来复查。
+    ///    地址始终是 `publish.sh` 创建的那个,不写成占位符、不留 TODO(仓库零 TODO 纪律)
     private let homepageURL = URL(string: "https://github.com/GFredR/Unroll")!
 
     /// M4:崩溃采集的会话标记要靠 AppKit 生命周期回调闭合
@@ -661,14 +662,42 @@ enum WindowProbe {
 
 /// SwiftUI 没有 `applicationWillTerminate` 的对应物,而「正常退出」的定义
 /// 恰恰就是这一刻 —— 崩溃采集的会话标记靠这两个回调闭合(§5.10.3-②):
-/// 启动写 `alive = true`,⌘Q / 关窗口写 `alive = false`。
+/// 启动写 `alive = true`,退出写 `alive = false`。
 /// 崩溃时永远写不到 false,于是下次启动就能检出「上次异常退出」。
+///
+/// ⚠️ 「退出」包含**关窗口**这一条 —— 而它此前只是这句话里的一个承诺,不是事实。
+///    见下面 `applicationShouldTerminateAfterLastWindowClosed` 的说明。
 @MainActor
 final class AppLifecycle: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 诊断模块自身失败一律静默(§5.10.5-②),绝不阻断启动
         CrashReporter.shared.beginSession()
+    }
+
+    /// **关掉最后一个窗口 = 结束这一次会话(2026-09-28 补)。**
+    ///
+    /// 这不是新功能,是把四处**已经写下的声明**补齐 —— 它们全都建立在"关窗 = 退出"之上,
+    /// 而这个方法是**可选**的、AppKit 的默认值是 `false`,此前没人实现它:
+    ///   · 本文件里「⌘Q / 关窗口写 `alive = false`」;
+    ///   · `CrashReporter.endSession` 的注释「正常退出(⌘Q / 关窗口)」;
+    ///   · `ReaderViewModel` 里「真正的释放点是换书 / 关窗」;
+    ///   · 设计文档 §5.10.2 里"用户关窗口时那条同步 C 循环要收得到取消"的假设。
+    /// 实测(`Scripts/probe-graceful-exit.sh MODE=close`)此前**没有一句成立**:
+    /// `alive` 停在 true、面包屑里没有 `appTerminated`、`PageStore.teardown()` 也不会被
+    /// 调用(全工程只有"换书"一个调用点)。
+    ///
+    /// ⚠️ **一个被实测否掉的理由**(记在这里免得日后有人拿它当依据):曾以为"不实现它,
+    ///    窗口就再也找不回来"。**假** —— 对已在运行的实例再发一次 open(点 Dock 图标那条路)
+    ///    窗口会回来,诊断段实测 `0 → 1`。所以这是个**取舍**,不是救火。
+    ///    真成立的理由只有两条:
+    ///      ① 上面四处声明,只有"关窗即退出"这一种修法能让它们**同时**成真;
+    ///      ② 进程退出 ⇒ 归档句柄 / 顺序扫描器 / 三个像素池 / 沙盒授权**一起**释放。
+    ///         不退出则它们一直留着(见上:teardown 只挂换书),而"关掉窗口"在用户心里
+    ///         就是"我读完了"。
+    ///    重开的体验并没有损失:最近打开 + 续读会把人带回原来那一页。
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 
     func applicationWillTerminate(_ notification: Notification) {

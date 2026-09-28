@@ -126,6 +126,11 @@ final class CrashReporter: @unchecked Sendable {
     }
 
     /// 正常退出(⌘Q / 关窗口)。写 false = 下次启动不会误报
+    ///
+    /// ⚠️ 「关窗口」这一半**曾经只是承诺**:App 没实现
+    /// `applicationShouldTerminateAfterLastWindowClosed`,关掉最后一个窗口不会退出,
+    /// 这个方法也就不会被调用(2026-09-28 实测)。现在那一半补上了 ——
+    /// 见 `UnrollApp.AppLifecycle` 里的说明与 `probe-graceful-exit.sh MODE=close`。
     func endSession() {
         guard isEnabled else { return }
         let current = readRecord()

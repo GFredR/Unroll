@@ -150,8 +150,14 @@ cleanup_probe_flags() {
     #    demo-jump)。所以新增场景时有一条联动纪律:
     #      **DemoDriver.Scene 加一个 case → 本行就必须加一个文件名**
     #    两处不联动就是「跑完没清干净」的复发点,而它没有任何报错。
+    #    2026-09-28 又发现同一条纪律**第二次**被漏:demo-quit 与 demo-close 也都不在这里。
+    #    它俩是 probe-graceful-exit.sh 专用的(那个脚本自带两道清理),所以漏了长期无症状
+    #    —— 但这两条恰恰是**最难收场**的两种残留:留下 demo-quit,用户下次正常启动时 App
+    #    起来就自己退出;留下 demo-close,它会自己把窗口关掉。这里补上,多一条恢复路径
+    #    (随手跑一次本脚本即可清掉)。
     rm -f "$dir/demo-enabled" "$dir/demo-grid" "$dir/demo-jump" \
           "$dir/demo-scroll" "$dir/demo-export" "$dir/demo-hint" "$dir/demo-chrome" \
+          "$dir/demo-quit" "$dir/demo-close" \
           2>/dev/null || true
 }
 

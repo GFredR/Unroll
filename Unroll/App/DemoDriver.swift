@@ -16,6 +16,8 @@
 //   demo-chrome   → 阅读层周边控件(左栏 / 翻页箭头)取证(见 runChrome 的判据说明)
 //   demo-quit     → **优雅退出**链路取证(见 runQuit 的判据说明)。⚠️ 它会真的把
 //                   App 退掉,所以没有截图 —— 判据在磁盘上,用 Scripts/probe-graceful-exit.sh 跑
+//   demo-close    → **关窗口**链路取证(2026-09-28,见 runClose 的判据说明)。同样没有
+//                   截图(窗口一关就没了可拍的),同样由 probe-graceful-exit.sh 跑(MODE=close)
 //
 // 为什么用标记文件而不是 argv:`open --args` 在 macOS 15 上实测**传不进 App**
 // (LaunchServices 会过滤未知 argv;2026-09-20 用探针 App 复核 —— 经 `open`
@@ -65,6 +67,9 @@ enum DemoDriver {
         /// 判据落在容器里的 `session.json` 与 `breadcrumbs.log` 上,
         /// 由 Scripts/probe-graceful-exit.sh 检查
         case quit = "demo-quit"
+        /// **关窗口**(2026-09-28)。与 `.quit` 并列的**第二种退出入口** ——
+        /// 它验的是「点红点 / ⌘W 关掉最后一个窗口」之后会发生什么(见 `runClose`)
+        case close = "demo-close"
 
         /// 认全名(`demo-grid`)与简写(`grid`)。**认不出返回 nil**,由调用方决定
         /// 兜底 —— 环境变量那条路的旧语义是「随便给个非空值就翻页」,
@@ -78,6 +83,7 @@ enum DemoDriver {
             case Scene.hint.rawValue, "hint": return .hint
             case Scene.chrome.rawValue, "chrome": return .chrome
             case Scene.quit.rawValue, "quit": return .quit
+            case Scene.close.rawValue, "close": return .close
             default: return nil
             }
         }
@@ -100,9 +106,11 @@ enum DemoDriver {
         // 中途异常而残留,自动翻页就会打乱用例,表现为「莫名其妙的失败」。
         guard !UnrollRuntime.isTesting else { return nil }
 
-        // ⚠️ `.quit` 排在最前:它会结束进程,若某个旧标记没清干净而它排在后头,
-        //    就等于"取证跑完了却没验退出"。其余顺序沿用历史行为。
-        for scene in [Scene.quit, .grid, .jump, .scroll, .export, .hint, .chrome, .paging]
+        // ⚠️ 两个**终结型**场景(`.quit` / `.close`)排在最前:它们会结束进程或关掉窗口,
+        //    若某个旧标记没清干净而它们排在后头,就等于"取证跑完了却没验退出"。
+        //    `.quit` 在 `.close` 之前:前者只留下 session 标记,后者还会把窗口关掉 ——
+        //    万一两个标记同时残留,先跑破坏性更小的那个,现场还能看。其余顺序沿用历史行为。
+        for scene in [Scene.quit, .close, .grid, .jump, .scroll, .export, .hint, .chrome, .paging]
         where FileManager.default.fileExists(atPath: flagURL(for: scene).path) {
             return scene
         }
@@ -147,12 +155,17 @@ enum DemoDriver {
     }
 
     private static func waitForDocument(scene: Scene, on vm: ReaderViewModel) async {
-        // 退出场景**不等文档**:要验的是"退出那一刻的收尾",它与有没有打开归档无关。
-        // 硬等一个文档只会把一个能跑的取证变成"样本没送到就什么都不做" —— 而
-        // "什么都没做"在这类脚本里的表现是超时,看起来像退出链路坏了,实际不是。
-        if scene == .quit {
-            log("scene=\(scene.rawValue) 跳过等文档(退出链路与是否打开归档无关)")
-            await runQuit()
+        // 两个**终结型**场景(`quit` / `close`)**不等文档**:要验的是"退出 / 关窗那一刻的
+        // 收尾",它与有没有打开归档无关。硬等一个文档只会把一个能跑的取证变成"样本没送到
+        // 就什么都不做" —— 而"什么都没做"在这类脚本里的表现是超时,看起来像链路坏了,
+        // 实际不是。
+        if scene == .quit || scene == .close {
+            log("scene=\(scene.rawValue) 跳过等文档(终结型场景与是否打开归档无关)")
+            if scene == .quit {
+                await runQuit()
+            } else {
+                await runClose()
+            }
             return
         }
 
@@ -194,6 +207,9 @@ enum DemoDriver {
             // 穷尽 —— 少一个 case 编译不过,这是**好事**:以后加场景时会当场被提醒,
             // 而不是静默走不到。
             await runQuit()
+        case .close:
+            // 同上:到不了这儿,只为穷尽。
+            await runClose()
         }
     }
 
@@ -592,6 +608,80 @@ enum DemoDriver {
         // 或 NSApp 为 nil)。probe 脚本会把它当成一条明确的失败线索,而不是等超时。
         try? await Task.sleep(for: .milliseconds(600))
         log("quit: FATAL 已发出 terminate: 但进程仍然活着 —— 响应者链里没人接")
+    }
+
+    /// 场景:**关窗口**(2026-09-28)。
+    ///
+    /// 为什么需要它 —— 这条路是**第二种退出入口**,而它与 ⌘Q 的差别不只是"少按一个键":
+    ///   · `UnrollApp.swift` 的 `AppLifecycle` 注释、`CrashReporter.endSession` 的注释、
+    ///     `ReaderViewModel` 里"真正的释放点是换书 / 关窗"那条,以及设计文档 §5.10.3-②,
+    ///     **四处**都写着「关窗口 = 正常退出 / 释放」;
+    ///   · 但全工程**没有实现** `applicationShouldTerminateAfterLastWindowClosed`
+    ///     (Grep 零匹配),而 AppKit 对该**可选**方法的默认值是 `false`
+    ///     ⇒ 关掉最后一个窗口**不会**退出 App,于是 `applicationWillTerminate` 不会被调用,
+    ///     `alive` 停在 true,`PageStore.teardown()` 也不会有人调用(它只挂"换书")。
+    ///   ⇒ 四句声明里,没有一句在实现上成立。这个场景就是去把这件事**测出来**。
+    ///
+    /// ★ 关键选择:发的是 **`performClose(_:)`**,**不是** `window.close()`。
+    ///   前者正是点红点 / ⌘W 走的那条路(先问 `windowShouldClose:` 委托再关),
+    ///   后者绕开了委托那一层 —— 与 `runQuit` 舍 `terminate(_:)` 而取
+    ///   `sendAction(terminate:)` 是**同一条理由**:既然要验,就验真的那条路,
+    ///   否则"委托接错线"这类故障会被漏掉,而那恰恰是最该被抓到的。
+    ///
+    /// ⚠️ 窗口清单必须**关之前**就写进日志:关完之后 `NSApp.windows` 里已经没东西可读,
+    ///   而"当时有几个窗口、关的是哪一个"正是事后判断"有没有真的关掉**最后一个**"的
+    ///   唯一依据。少了这一步,"关完还剩 0 个可见窗口"这句话就没有对照物。
+    ///
+    /// 判据不在这里(进程马上要没了,App 无法断言自己),而在磁盘上:`session.json` 的
+    /// `alive` 必须变成 false、面包屑末条必须是 `appTerminated` —— 与 ⌘Q 那半截**逐字相同**。
+    /// 由 `Scripts/probe-graceful-exit.sh MODE=close` 检查。
+    private static func runClose() async {
+        log("run close: 准备把 performClose: 发给主窗口(与点红点 / ⌘W 同一条路)")
+        // 留一点时间:① 让 LaunchServices 那侧把窗口真的画出来(与真实使用一致);
+        // ② 让 probe 脚本先把"App 在跑"观察到位,免得它把"还没起来"误读成"已经退出了"
+        try? await Task.sleep(for: .milliseconds(1200))
+
+        let before = NSApp.windows
+        log("close: 关之前 windows=\(before.count) " + before.map {
+            "[vis=\($0.isVisible) main=\($0.canBecomeMain) \(type(of: $0))]"
+        }.joined(separator: " "))
+
+        // 只关**可见且能成为主窗口**的那些 —— 这正是用户眼里"那个窗口"。
+        // 不过滤的话会把 SwiftUI 造出来的隐藏辅助窗口一起关,而它们关了不影响结论,
+        // 却会让"关掉的是不是最后一个"这件事说不清。
+        let targets = before.filter { $0.isVisible && $0.canBecomeMain }
+        log("close: 待关的主窗口数=\(targets.count)")
+        guard !targets.isEmpty else {
+            log("close: FATAL 没有可见的主窗口可关 —— 本场景前提不成立(窗口还没画出来?)")
+            return
+        }
+
+        for window in targets {
+            // ⚠️ 必须在**调用之前**写这一行(与 `runQuit` 的 "now" 同一手法):
+            //    若关掉最后一个窗口真的触发了退出,`performClose` 会在**同步流程里**
+            //    就把进程终结掉,于是它下面那句日志永远写不到。
+            //    换句话说:这一行证明的是"驱动把动作发出去了",而"动作生效了"由
+            //    进程退出 + `alive=false` + `appTerminated` 三条磁盘判据证明 ——
+            //    意图与结果分属两个证据,不混在一起。
+            log("close: performClose → '\(window.title)' now")
+            window.performClose(nil)
+        }
+
+        // 关完这一下:窗口没了没有?**这一行是"关成功"与"委托拦下了"的分界**。
+        try? await Task.sleep(for: .milliseconds(800))
+        let after = NSApp.windows.filter { $0.isVisible && $0.canBecomeMain }
+        log("close: 关之后可见主窗口数=\(after.count)")
+
+        // 若设计语义(关窗 = 正常退出)成立,进程**此刻正在退出**,下面这行永远写不到。
+        // 它**刻意保留**:一旦 probe 读到它,就是一条**确定的**结论 ——
+        // "关掉最后一个窗口之后进程还活着",而不是"可能还没退完,再等等"。
+        // (这正是 `runQuit` 里那条 FATAL 的同一手法:把"没发生"写成可判定的证据。)
+        // ⚠️ 这里**只报事实**。「关完之后还能不能把窗口找回来」是另一件事 ——
+        //    它得从**外面**发起(LaunchServices 的 reopen,即点 Dock 图标那条路),
+        //    由 probe 脚本的诊断段回答;写在日志里就变成了自证。
+        try? await Task.sleep(for: .milliseconds(1500))
+        log("close: ALIVE 关掉最后一个窗口已 1.5s,进程仍在 —— 没有人实现 "
+            + "applicationShouldTerminateAfterLastWindowClosed")
     }
 }
 #endif

@@ -264,4 +264,28 @@ final class AppSkeletonTests: XCTestCase {
                           Budget.maxPixels / 2,
                           "两个垫图池之和已逼近全分辨率池的量级 —— 它们只是垫图")
     }
+
+    /// 关掉最后一个窗口 = 结束这一次会话(2026-09-28)。
+    ///
+    /// 这条断言表面上在复述实现(「那个 override 返回 true」),但它锁的是**一个决定**,
+    /// 而且是个**长期只写在注释里、实现里根本没有**的决定 ——
+    /// 四处都假设「关窗 = 退出 / 释放」:
+    ///   · `AppLifecycle` 自己的注释;
+    ///   · `CrashReporter.endSession` 的注释;
+    ///   · `ReaderViewModel.gridThumbs` 那条「真正的释放点是换书 / 关窗」;
+    ///   · 设计文档里"用户关窗口时那条同步 C 循环要收得到取消"的假设。
+    /// 而 `applicationShouldTerminateAfterLastWindowClosed` 是**可选**方法、AppKit 的
+    /// 默认值是 `false`,此前无人实现 ⇒ 这四句**没有一句成立**(实测:`alive` 停在 true)。
+    ///
+    /// 端到端那条由 `Scripts/probe-graceful-exit.sh MODE=close` 判 —— 但它是 opt-in 的,
+    /// 所以要在这里留一条**默认就跑**的守卫:谁把那个 override 删了,这条当场红。
+    /// (`teardown()` 只有"换书"一个调用点,所以关窗那条路**只能**靠进程退出兜底 ——
+    ///  这也是为什么这条断言配得上一个用例:它守的不是一句注释,是唯一的释放路径。)
+    @MainActor
+    func testClosingTheLastWindowEndsTheSession() {
+        XCTAssertTrue(
+            AppLifecycle().applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared),
+            "关掉最后一个窗口必须结束会话 —— 否则 alive 会停在 true、面包屑里没有 "
+            + "appTerminated,归档句柄与三个像素池也不会随进程释放")
+    }
 }
