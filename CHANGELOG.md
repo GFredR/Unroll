@@ -1,9 +1,12 @@
 # Changelog
 
-## Unreleased — 关掉最后一个窗口 = 结束会话 / Closing the last window now ends the session
+## 1.2.2 — 2026-09-28 · 关掉最后一个窗口 = 结束会话（修掉四处早已写下、却一句都不成立的声明）/ Closing the last window now ends the session
 
-> ⚠️ **这一批不在 `1.2.1` 的 DMG 里。** 它改的是 App 行为（源码路径），要对外生效必须**升版重出产物**；
-> 在那之前，已发布的 1.2.1 与 `main` 不再对应 —— 发布前检的「产物 ↔ 源码」判据会因此变红，那是**如实**的。
+> 本版只有**一处行为变更**，加两处连带修正。它落在这个版本里有一个具体原因：修复之前，`AppLifecycle` 的注释、
+> `CrashReporter.endSession` 的注释、`ReaderViewModel.gridThumbs` 的注释、以及设计文档里那条「关窗时要收得到取消」
+> 的假设 —— **四处都写着「关窗 = 退出」，而实现里没有**。那是一个**没有运行时症状**的缺陷：关掉最后一个窗口后
+> 进程确实还活着，所以 `alive = true` 在那个时点是**真话**，不弹假崩溃提示、也不弄红任何断言；错的是一句**没人复核的承诺**。
+> 不修它，用户按红点关掉窗口后，归档句柄、顺序扫描器、三个像素池与沙盒授权就一直留着，直到手动 ⌘Q。
 
 **中文**
 - **行为变更：关掉最后一个窗口现在会退出 App。** 此前不会 —— `applicationShouldTerminateAfterLastWindowClosed` 是 AppKit 的**可选**委托方法，默认值 `false`，而全工程没有人实现过它。于是**四句早已写下的声明没有一句成立**：`AppLifecycle` 注释里的「⌘Q / 关窗口写 `alive = false`」、`CrashReporter.endSession` 注释里的「正常退出(⌘Q / 关窗口)」、`ReaderViewModel` 里「真正的释放点是换书 / 关窗」、以及设计文档里「用户关窗口时那条同步 C 循环要收得到取消」的假设。实测：关掉最后一个窗口后 `alive` 停在 `true`、面包屑里没有 `appTerminated`、`PageStore.teardown()` 也不会被调用（全工程只有"换书"一个调用点）
@@ -69,7 +72,7 @@
 - **泄漏扫描补上两个"事后删不掉"的盲区**：① 已删除文件的**历史内容**（工作区看着干净，对象库里还在）② **二进制**里的字符串。新 `Scripts/scan-history-blobs.sh` 扫 `git cat-file --batch-all-objects`（比 `rev-list --all` 更全，**连 dangling 对象也扫** —— 它们照样会被 push），已接进 `publish.sh` 第 6 步，现在是**三通道**
 - **优雅退出链路首次在本机取证成功**（`Scripts/probe-graceful-exit.sh`）：此前从外面发 ⌘Q 要经 Apple Events，而 ad-hoc 重签后该授权在 TCC 里失效（实测 `-10004`），只能拿"强杀会被检出"当替代证据 —— 而那与"优雅退出会收尾"是**方向相反**的两件事。现在由 `DemoDriver` 的 `demo-quit` 场景经**响应者链**发 `terminate:`（与菜单里「退出 Unroll」项逐字同路），断言磁盘效果（`session.json` 的 `alive=false` + 面包屑末条 `appTerminated`），另配 `MODE=abnormal` 反向对照证明这两条断言**当场会红**
 - 实测：Debug 版 `demo-quit` 走通、`alive=false` + `appTerminated` 两条判据全绿；`MODE=abnormal`（强杀）下两条**全红**。整条构建链在 `/tmp` 里另跑一遍 rc=0（两条抽出的守卫在真实构建里都通过）
-- ⚠️ 已知仍未覆盖：**「关窗口」是否真的会退出 App**。代码里**没有实现** `applicationShouldTerminateAfterLastWindowClosed`，按 AppKit 默认关掉最后一个窗口**不会**退出 —— 因此 `UnrollApp.swift` 注释里「⌘Q / 关窗口」的后半截**存疑**（已登记）。⇒ **本条已于 2026-09-28 关闭**：那半截被真做出来并由 `probe-graceful-exit.sh MODE=close` 端到端钉住。
+- ⚠️ 已知仍未覆盖：**「关窗口」是否真的会退出 App**。代码里**没有实现** `applicationShouldTerminateAfterLastWindowClosed`，按 AppKit 默认关掉最后一个窗口**不会**退出 —— 因此 `UnrollApp.swift` 注释里「⌘Q / 关窗口」的后半截**存疑**（已登记）。⇒ **本条已于 `1.2.2`（2026-09-28）关闭**：那半截被真做出来，并由 `probe-graceful-exit.sh MODE=close` 端到端钉住 —— 从 1.2.2 的 DMG 起才第一次对用户生效。
 - 单元测试**数量不变**（337 用例 / 333 通过 / 4 skip / 0 失败 —— **该批当时**计数；同日第二批补 1 例后为 338 / 334，见下）—— 本批新增的全是 shell 脚本级的反向测试
 
 **English**
@@ -79,7 +82,7 @@
 - **Two more leak-scan blind spots closed — both of them unfixable after the fact**: ① the **historical content of deleted files** (a clean working tree tells you nothing; the blobs are still in the object store) and ② **strings inside binaries**. The new `Scripts/scan-history-blobs.sh` walks `git cat-file --batch-all-objects` (broader than `rev-list --all`: it also covers **dangling** objects, which would still be pushed), and is wired into step 6 of `publish.sh`. The leak scan is now **three channels**.
 - **The graceful-quit path is now verified on this machine** (`Scripts/probe-graceful-exit.sh`). Sending ⌘Q from outside goes through Apple Events, and that authorization is invalidated in TCC after ad-hoc re-signing (measured `-10004`), so the only evidence used to be "a hard kill is detected as a crash" — which is the **opposite** direction from "a graceful quit closes the session". A new `DemoDriver` scene (`demo-quit`) now sends `terminate:` through the **responder chain** (the same path the "Quit Unroll" menu item uses, character for character), and the script asserts the on-disk effect (`alive=false` in `session.json`, with `appTerminated` as the last breadcrumb). A `MODE=abnormal` control run proves those two assertions **do go red**.
 - Measured: the Debug `demo-quit` run passes both disk assertions, and the `MODE=abnormal` (hard kill) run fails both. The whole build chain was also re-run into `/tmp` (rc=0), confirming both extracted guards fire inside a real build.
-- ⚠️ Still not covered: **whether closing the window really quits the app**. The app does **not** implement `applicationShouldTerminateAfterLastWindowClosed`, and AppKit's default for that optional method is `false` — so closing the last window does **not** quit, which makes the "⌘Q / close window" wording in `UnrollApp.swift` questionable in its second half (logged). ⇒ **closed on 2026-09-28**: that half is now implemented and pinned end to end by `probe-graceful-exit.sh MODE=close`.
+- ⚠️ Still not covered: **whether closing the window really quits the app**. The app does **not** implement `applicationShouldTerminateAfterLastWindowClosed`, and AppKit's default for that optional method is `false` — so closing the last window does **not** quit, which makes the "⌘Q / close window" wording in `UnrollApp.swift` questionable in its second half (logged). ⇒ **closed in `1.2.2` (2026-09-28)**: that half is now implemented and pinned end to end by `probe-graceful-exit.sh MODE=close` — it first reaches users in the 1.2.2 DMG.
 - The unit-test **count is unchanged** (337 cases / 333 passed / 4 skipped / 0 failed — the **count at that point**; a second batch the same day added 1 case, taking it to 338 / 334, see below) — everything added in this batch is shell-level reverse testing.
 
 ### 窗口尺寸/位置记忆取证 + 续读落点定案（2026-09-24 第二批）—— App 行为不变
