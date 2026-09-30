@@ -5,10 +5,10 @@
 
 /* Empty state (welcome screen) */
 "reader.empty.title" = "Unroll";
-"reader.empty.hint" = "Drop a .cbz / .cbr / .cb7 / .cbt comic archive,\nor a plain .zip / .rar / .7z / .tar — double-click in Finder works too.";
+"reader.empty.hint" = "Drop a .cbz / .cbr / .cb7 / .cbt archive — or a folder full of images.\nPlain .zip / .rar / .7z / .tar work too; double-click in Finder as well.";
 "reader.empty.open" = "Open File…";
 
-/* Discoverability (2026-09-22): there are 23 shortcut-carrying menu commands
+/* Discoverability (2026-09-22): there are 24 shortcut-carrying menu commands
    and no way to see them without opening the menu bar. The empty state is the
    one moment the user is actually sitting still — so the highest-value
    shortcuts go here.
@@ -76,10 +76,20 @@
 /* #6 Corrupted / not an archive */
 "archive.corrupted.title" = "Can't open this file";
 "archive.corrupted.body" = "This file may be corrupted, or isn't a supported format (cbz / cbr / cb7 / cbt / zip).";
+/* Folder wording: a folder that won't open failed for an entirely different reason
+   (moved / deleted / no permission) — reusing the line above sends the user off to
+   re-download an archive that never existed */
+"archive.corrupted.folder.title" = "Can't open this folder";
+"archive.corrupted.folder.body" = "It may have been moved or deleted, or Unroll doesn't have permission to read it.";
 
 /* #7 No images */
 "archive.noImages.title" = "No images found in this archive";
 "archive.noImages.body" = "Read %ld entries, but none of them is an image.";
+/* Same fact, folder wording (2026-09-28). "Entries" is archive vocabulary, and this
+   also answers the question the user is actually asking: "I picked my comic folder,
+   why does it say there are no images?" Answer: subfolders are not descended into. */
+"archive.noImages.folder.title" = "No images in this folder";
+"archive.noImages.folder.body" = "Read %ld files, but none of them is an image. Unroll reads only the top level of the folder you pick and never descends into subfolders — if you picked a folder that holds one subfolder per chapter, choose the chapter folder instead.";
 
 /* #8 Error-state button */
 "archive.error.chooseAnother" = "Choose Another File…";
@@ -87,6 +97,15 @@
 /* ---- M2 extras (not in §5.9.3.1; polish in M3) ---- */
 "archive.empty.title" = "This archive is empty";
 "archive.empty.body" = "This archive doesn't contain any files.";
+/* Folder wording, for the case where the folder truly contains nothing.
+   Do NOT reuse it for "only subfolders inside" — that is a different fact
+   (the folder is not empty at all) and has its own keys below. */
+"archive.empty.folder.title" = "This folder is empty";
+"archive.empty.folder.body" = "The folder you picked contains no files. Unroll only looks at the top level, not inside subfolders.";
+/* Only subfolders inside (2026-09-30): split out of the empty group.
+   Must say both what is there and what to do next. */
+"archive.subfolders.folder.title" = "This folder only contains subfolders";
+"archive.subfolders.folder.body" = "Found %ld subfolders, but no images directly inside this folder. Unroll reads only the top level of the folder you pick and never descends into subfolders — choose the chapter folder instead.";
 "archive.page.failed.title" = "This page failed to load";
 "archive.page.failed.body" = "This page is not an image, or it is damaged — either way it cannot be shown. Other pages are not affected.";
 
@@ -94,6 +113,7 @@
 
 /* File menu */
 "app.menu.open" = "Open…";
+"app.menu.openFolder" = "Open Folder…";
 "app.menu.openRecent" = "Open Recent";
 "app.menu.clearRecent" = "Clear Menu";
 

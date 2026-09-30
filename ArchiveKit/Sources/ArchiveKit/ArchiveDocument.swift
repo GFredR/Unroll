@@ -4,6 +4,15 @@
 // 生命周期:open(url:passphrase:) 列目录建索引(含四态检测)→ data(at:) 按页取原始字节
 //          → (上层 PageStore 交 ImageIO 解码)。
 //
+// **两种来源(2026-09-28)**:`open(url:)` 收**归档文件**也收**目录**。目录走
+// `openFolder` —— 只列当前层、只收普通文件,复用同一套图片过滤(`isListedImage`)
+// 与自然排序。于是上层(PageStore / 缩略图网格 / 批量导出 / 双页 / 缩放…)
+// 一行都不用改,散图目录自动获得全部既有能力。
+//   · `data(at:)` 对目录**直接读文件字节**,不碰 libarchive;
+//   · ⚠️ **不递归**是刻意的,不是没做:递归会把"选一个根目录"变成"读进几千张
+//     无关图",而子目录之间的先后根本没有答案 —— 那件事的正式名字叫书架,
+//     设计文档 §2.2 明确不做。
+//
 // v2 密码(2026-09-17):open 接受可选 passphrase,在 archive_read_open **之前**
 // 注入(库的要求,见 shim.h)。自此加密归档可解 —— 但**只有 ZIP 真能解**:
 // ZipCrypto 与 AES-256 实测都能读出正确字节;7z 加密是库的能力死限,
@@ -56,7 +65,19 @@ public final class ArchiveDocument: Sendable {
     /// libarchive 识别的归档格式(错误文案分流依据,§5.9.3 图 10 FMT 分支)
     public let format: ArchiveFormat
 
-    /// 归档源文件;data(at:) 每次重新打开它(文件被移走/删除 → 抛 .corrupted)。
+    /// **本档来自目录而不是归档文件**(2026-09-28)。判据直接看 `format`,
+    /// 不另存一个 Bool —— 没有第二个来源能产生 `.folder`,多一个字段就多一处
+    /// 能与事实不一致的地方。目录源必然满足:protection == .none /
+    /// encryptedImageCount == 0 / passphrase == nil / rawPositions 为空
+    /// (文件系统这一层没有"加密存储"这个概念)。
+    /// public:App 层要用它做两件判据 —— 续读键取什么身份量(目录没有稳定的
+    /// 文件大小)、以及"归档完整性检查"这一项对它有没有意义(没有)。
+    /// internal 会让 Unroll 模块编译不过 —— ArchiveKit 是独立 SPM 包,
+    /// "同一份源码"不等于"同一个模块",这条踩过一次就会记住
+    public var isFolderSource: Bool { format == .folder }
+
+    /// 归档源文件(**或目录源里的那个目录**);data(at:) 每次重新打开它
+    /// (文件被移走/删除 → 抛 .corrupted)。
     /// internal(非 private):SequentialPageReader 复用同一打开逻辑(§5.1 顺序扫描器)
     let url: URL
 
@@ -116,6 +137,14 @@ public final class ArchiveDocument: Sendable {
     /// 开销可忽略;命中即抛 `CancellationError`(VM 已有专门分支,不写成失败态)。
     public static func open(url: URL, passphrase: String? = nil,
                            isCancelled: (@Sendable () -> Bool)? = nil) throws -> ArchiveDocument {
+        // 目录 = 另一种来源(2026-09-28)。放在最前:它连 libarchive 都不需要碰。
+        // 让 `open` 自己分流(而不是另开一个公开入口)是有意的 —— 打开链路只有
+        // 一条路,拖拽 / onOpenURL / 面板 / 最近打开拿到的 URL 是文件还是目录,
+        // 调用方不必知道,也就没有"某一条入口忘了处理目录"这种缺口
+        if isDirectory(url) {
+            return try openFolder(url: url, isCancelled: isCancelled)
+        }
+
         let a = try openRawHandle(url: url, passphrase: passphrase)
         defer { dispose(a) }
 
@@ -233,6 +262,110 @@ public final class ArchiveDocument: Sendable {
                                rawPositions: rawPositions, entryEncrypted: entryEncrypted)
     }
 
+    // MARK: - 打开目录(散图当一本读,2026-09-28)
+
+    /// 打开一个**目录**:把当前层里的图片文件按自然排序当一本读。
+    ///
+    /// 每条设计都对着一个具体的坏法:
+    ///   · **只列当前层、不递归**(见文件头)。子目录在这里是"不是页",跳过;
+    ///   · **只收普通文件**(`isRegularFile`)。⚠️ 这一步**不能**推给 `isListedImage`:
+    ///     它按"归档内相对路径"判,而 `vol01` 这种没有点号的目录名会命中它的
+    ///     规则 2(无扩展名 → 当页收下)—— 那正是"递归"从后门溜回来的形态。
+    ///     在这里挡住它,等于给"不递归"上了一把结构锁,而不是靠一句注释;
+    ///   · **图片过滤复用 `isListedImage`**:隐藏文件(`.DS_Store`)、非图片扩展名的
+    ///     规则与归档完全一致。两套规则必然漂移,而它们的分歧点恰好就是
+    ///     "用户看到多了一张 / 少了一张"这种没人会报的 bug;
+    ///   · **缩略图目录那条软规则在这里天然不适用**:它按路径段判,而当前层的
+    ///     文件名里不可能含 `/`,所以不为目录另开一次判定;
+    ///   · **不碰 libarchive**:没有句柄、没有加密、没有 CRC。读不动只有一种原因 ——
+    ///     这个文件读不出来。
+    ///
+    /// 抛错与归档侧**同一套语义**(§5.9.3.1 的文案按 error 分流,见 VM):
+    ///   · `.corrupted`  读不了目录(无权限 / 已被删除 / 同名但其实是文件)
+    ///   · `.empty`      一个条目都没有
+    ///   · `.subfoldersOnly`  有条目、但全是子文件夹(见 `ArchiveError` 的说明:
+    ///     这与"空"是两件事,文案必须分开)
+    ///   · `.noImages`   有条目但无图片(UI 会换成"文件夹"版文案)
+    ///   · `CancellationError`  调用方换文件了
+    private static func openFolder(url: URL,
+                                   isCancelled: (@Sendable () -> Bool)?) throws -> ArchiveDocument {
+        // 一次性批量预取属性:`contentsOfDirectory` 把 isRegularFile / fileSize
+        // 连同目录项一起取回,后面逐个 `resourceValues` 是内存命中,不是 N 次 stat
+        let keys: [URLResourceKey] = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]
+        let items: [URL]
+        do {
+            items = try FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: keys, options: [])
+        } catch {
+            throw ArchiveError.corrupted
+        }
+
+        var rawNames: [String] = []
+        var rawSizes: [Int64?] = []
+        // 子文件夹**计数但不收下**(不递归是刻意的)。这个计数不是装饰 ——
+        // 它决定下面抛哪一个错,而那两个错给用户的下一步完全不同
+        var subfolderCount = 0
+        for (i, item) in items.enumerated() {
+            // 与归档侧同一个节流粒度:每 C.cancellationCheckEvery 条问一次。
+            // 枚举本身是同步阻塞的,几千个文件的目录不该让"换文件"等它跑完
+            if let isCancelled, i % C.cancellationCheckEvery == 0, isCancelled() {
+                throw CancellationError()
+            }
+            let values = try? item.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey, .fileSizeKey])
+            // 子目录 / 符号链接 / 其它:都不是页(见上面第二条)
+            guard values?.isRegularFile == true else {
+                if values?.isDirectory == true { subfolderCount += 1 }
+                continue
+            }
+            rawNames.append(item.lastPathComponent)
+            rawSizes.append(values?.fileSize.map(Int64.init))
+        }
+
+        // ⚠️ 这两条**必须分开**:一个"整层都是 vol01/ vol02/ 子文件夹"的目录
+        //    (解压出来 / 网盘同步下来的目录树常态)在最外层是**一点都不空**的。
+        //    说它"空",用户会去确认文件到底存没存下来 —— 全是白费功夫
+        guard !rawNames.isEmpty else {
+            throw subfolderCount > 0
+                ? ArchiveError.subfoldersOnly(count: subfolderCount)
+                : ArchiveError.empty
+        }
+
+        let imageIdx = rawNames.indices.filter { isListedImage(rawNames[$0]) }
+        guard !imageIdx.isEmpty else { throw ArchiveError.noImages(found: rawNames.count) }
+
+        let sorted = imageIdx.sorted { NaturalSort.less(rawNames[$0], rawNames[$1]) }
+
+        var entries: [ArchiveEntry] = []
+        for (newIndex, raw) in sorted.enumerated() {
+            entries.append(ArchiveEntry(path: rawNames[raw], index: newIndex,
+                                        size: rawSizes[raw], isImage: true))
+        }
+
+        return ArchiveDocument(url: url, entries: entries, protection: .none,
+                               encryptedImageCount: 0, format: .folder, passphrase: nil,
+                               rawPositions: [],
+                               entryEncrypted: Array(repeating: false, count: entries.count))
+    }
+
+    /// 这个 URL 是不是目录。两种判据合用的理由:
+    ///   · `resourceValues` 在**没有沙盒访问权**时会抛错,而 `hasDirectoryPath`
+    ///     仍然答得对(纯路径判断)—— 用它兜底,免得"没权限"被误判成"是个文件";
+    ///   · 反过来,`hasDirectoryPath` 对**指向目录的符号链接**是 false,而
+    ///     `resourceValues` 跟随链接 —— 有权限时以它为准。
+    /// 刻意不用 `fileExists`:它带缓存,且同样要权限(两个缺点它都有)
+    ///
+    /// public:App 层也要靠它**选失败文案** —— 打开失败时拿不到 document,
+    /// 只能从 URL 反推"用户给的是目录还是文件"。⚠️ 那里**不能**图省事用
+    /// `url.hasDirectoryPath`:真实目录的 URL 并不保证带尾斜杠(拖拽来的、
+    /// 书签解析出来的就可能不带),于是"能打开的空目录"会被讲成"无法打开这个归档"。
+    /// 判据只留这一份,与决定走哪条路的那次判断**同源**
+    public static func isDirectory(_ url: URL) -> Bool {
+        if let isDir = try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory {
+            return isDir
+        }
+        return url.hasDirectoryPath
+    }
+
     // MARK: - 按页读取(图 4 RAW 段)
 
     /// 取第 index 页的原始字节。每次调用自建 libarchive 实例:
@@ -253,6 +386,18 @@ public final class ArchiveDocument: Sendable {
         }
         if entryEncrypted[index], passphrase == nil {
             throw Self.encryptionError(for: format)
+        }
+
+        // 目录源:每页就是一个文件,**直接读字节**,不建 libarchive 实例。
+        // 对打开之后被删 / 被移走 / 变得读不出来的文件:报"这一页坏了" ——
+        // 单页失败不扩散(§5.9.4 约束 4),用户看到的是那一张失败卡片,其余页照常。
+        // ⚠️ 刻意用 `Data(contentsOf:)` 而不是 `.mappedIfSafe`:映射式读取在文件
+        //    被删除后会 **SIGBUS**(整个 App 挂掉),而"读着读着把文件删了"在这个
+        //    场景里并不罕见 —— 一张图的复制代价远小于一次崩溃
+        if isFolderSource {
+            guard let data = try? Data(contentsOf: url.appendingPathComponent(entries[index].path))
+            else { throw ArchiveError.corrupted }
+            return data
         }
 
         let a = try Self.openRawHandle(url: url, passphrase: passphrase)
@@ -446,7 +591,9 @@ public final class ArchiveDocument: Sendable {
         switch format {
         case .zip, .rar: return .encrypted      // 给密码入口:zip 实测可解,rar 证据倾向可解
         case .sevenZip: return .encryptedUnsupportedFormat
-        case .tar, .other: return .encryptedUnsupportedFormat
+        // .folder 不可达(目录源没有加密条目,entryEncrypted 全 false)——
+        // 列在这里只为 switch 穷尽,不是"目录也算这种"
+        case .tar, .other, .folder: return .encryptedUnsupportedFormat
         }
     }
 
@@ -544,6 +691,10 @@ public enum ArchiveFormat: Sendable, Equatable {
     ///    拿到加密样本后必须复测,见设计文档 §5.8。
     case rar
     case tar          // .cbt / .tar —— 无加密语义
+    /// **目录源**(2026-09-28):一个文件夹里的散图当一本读。
+    /// 它不是 libarchive 认出来的格式 —— 只有 `openFolder` 会产生它,
+    /// `init(name:)` 永远不返回本 case(那条映射只描述"库认得什么")
+    case folder
     case other(name: String)
 
     init(name: String) {

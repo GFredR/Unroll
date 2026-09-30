@@ -89,7 +89,8 @@ enum CoverProvider {
         case .encrypted, .headerEncrypted, .encryptedUnsupportedFormat:
             return .encrypted
         default:
-            // 含 .corrupted / .empty / .noImages / .unknown:对预览来说都是「读不出来」
+            // 含 .corrupted / .empty / .subfoldersOnly / .noImages / .unknown:
+            // 对预览来说都是「读不出来」
             return .unreadable
         }
     }

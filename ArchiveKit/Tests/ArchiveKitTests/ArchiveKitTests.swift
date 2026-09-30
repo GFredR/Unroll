@@ -41,7 +41,10 @@ final class ArchiveKitTests: XCTestCase {
         XCTAssertEqual(readable.count + terminal.count, 4, "§5.9.3 的四态一个都不能少")
     }
 
-    /// 错误模型:覆盖设计文档 §4.1 列出的全部失败形态(损坏/加密/空/无图/未知)
+    /// 错误模型:覆盖设计文档 §4.1 列出的全部失败形态(损坏/加密/空/无图/未知)。
+    /// `.subfoldersOnly` 是**目录源**独有的形态(§4.1 只讲归档),2026-09-30 一并登记 ——
+    /// 这条测试的实际作用是"加 case 时逼你回头看一眼",漏登记它就静默失效
+    /// (下一个加 case 的人会看到数字仍然对得上而通过)
     func testErrorCasesCoverDesignDoc() {
         let errors: [ArchiveError] = [
             .corrupted,
@@ -50,8 +53,9 @@ final class ArchiveKitTests: XCTestCase {
             .headerEncrypted,
             .empty,
             .noImages(found: 12),
+            .subfoldersOnly(count: 2),
             .unknown(code: -30, message: "header is encrypted"),
         ]
-        XCTAssertEqual(errors.count, 7)
+        XCTAssertEqual(errors.count, 8)
     }
 }

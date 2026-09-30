@@ -1,7 +1,7 @@
 // AI-Generated | 可修改
 // ShortcutCatalog —— 「帮助 → 键盘快捷键…」与空态小抄的**展示清单**(2026-09-22)
 // ----------------------------------------------------------------------------
-// 为什么需要这份清单:菜单栏里有 23 条**带快捷键**的命令,不翻菜单就完全看不见
+// 为什么需要这份清单:菜单栏里有 24 条**带快捷键**的命令,不翻菜单就完全看不见
 // 它们存在(菜单里还有几条不带键位的,比如「清空最近打开」/「显示阅读提示」,
 // 那些不属于这份清单)。
 // 但把清单**手抄一份**进 App 有个众所周知的下场 —— 与真实菜单分叉,
@@ -56,6 +56,7 @@ enum ShortcutCatalog {
     static let groups: [ShortcutGroup] = [
         ShortcutGroup(id: "help.shortcut.group.file", items: [
             ShortcutItem("app.menu.open", "⌘O"),
+            ShortcutItem("app.menu.openFolder", "⌥⌘O"),
             ShortcutItem("app.menu.saveCurrentPage", "⌘S"),
             ShortcutItem("app.menu.exportPages", "⇧⌘E"),
             ShortcutItem("app.menu.revealInFinder", "⇧⌘F"),

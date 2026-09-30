@@ -81,9 +81,10 @@ final class ArchiveKitContractTests: XCTestCase {
             .headerEncrypted,
             .empty,
             .noImages(found: 12),
+            .subfoldersOnly(count: 2),
             .unknown(code: -30, message: "header is encrypted"),
         ]
-        XCTAssertEqual(errors.count, 7, "M0 锁定的错误 case 总数,加 case 请连测试一起改")
+        XCTAssertEqual(errors.count, 8, "全部 case 都要在这里登记 —— 加 case 请连这条一起改")
     }
 
     // MARK: - NaturalSort(M1 真实现)

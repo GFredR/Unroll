@@ -5,6 +5,11 @@
 // 对 solid 7z 是 O(n²) —— 实测 150 页累计 2423ms vs 顺序扫描 34ms(71×),
 // 数据见 工程笔记(未随仓库发布) §4,工具 Scripts/bench_archive.c。
 //
+// **目录源不走这里(2026-09-28)**:目录没有"流"可言,每页就是一个文件,`data(at:)`
+// 直接转交 `ArchiveDocument`。本类存在的唯一理由是躲开 solid 包的 O(n²),而目录
+// 访问本来就是 O(1) —— 为它维护一个句柄、一套重开逻辑,只会多出一处**能写错、
+// 却永远不会被发现**的地方(没人会在目录上遇到"翻回去就坏"那种症状)。
+//
 // 本类持有**单个** struct archive 顺序前进:
 //   · 前向访问(连续翻页/预读):从当前位置继续 next_header,摊销 O(1)/页;
 //   · 后向访问:流不能回头 → 关实例重开、从头走到目标(唯一重复解压代价,
@@ -67,6 +72,15 @@ public final class SequentialPageReader {
         // 带密码时不拦 —— 那些页现在读得出来,该由真读决定成败
         if document.entryEncrypted[index], document.passphrase == nil {
             throw ArchiveDocument.encryptionError(for: document.format)
+        }
+
+        // 目录源:没有流,直接交给 document 读文件字节。
+        // ⚠️ 这里是**唯一**的目录分支口 —— PageStore / PageGridBuilder /
+        //    PageSequenceExtractor / ArchiveIntegrityChecker 四处都 new 本类,
+        //    在这一点上直通,四条链路就一起支持了目录,不必各改一遍
+        //    (那种改法漏掉一处的症状是"网格有图、导出没反应"。)
+        if document.isFolderSource {
+            return try document.data(at: index)
         }
 
         let target = document.rawPositions[index]

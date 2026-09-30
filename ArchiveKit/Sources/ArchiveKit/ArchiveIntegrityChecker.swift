@@ -158,7 +158,7 @@ extension ArchiveError {
         switch self {
         case .encrypted, .wrongPassphrase, .encryptedUnsupportedFormat, .headerEncrypted:
             return true
-        case .corrupted, .empty, .noImages, .unknown:
+        case .corrupted, .empty, .subfoldersOnly, .noImages, .unknown:
             return false
         }
     }

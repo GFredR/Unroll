@@ -85,7 +85,10 @@ struct ReaderView: View {
         // 自身大小,窗口中央会浮一块「内容大小的色块」(2026-09-14 实测踩坑)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DesignSystem.Palette.canvas.ignoresSafeArea())
-        // 拖拽打开:全阶段可用(空态的主入口、阅读中的换书入口)
+        // 拖拽打开:全阶段可用(空态的主入口、阅读中的换书入口)。
+        // **拖进来的目录同样落在这里**(2026-09-28),不需要为它加分支 ——
+        // 文件还是目录由 `ArchiveDocument.open` 自己分流。这正是"让 open 内部判断"
+        // 而不是另开一个入口的收益:入口越多,漏处理目录的地方就越多
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first else { return false }
             viewModel.open(url: url)
@@ -195,7 +198,7 @@ private struct EmptyStateView: View {
 
     /// 常用快捷键小抄(2026-09-22)。
     ///
-    /// **为什么放在空态**:菜单栏里有 23 条带快捷键的命令,不翻菜单就完全看不见;
+    /// **为什么放在空态**:菜单栏里有 24 条带快捷键的命令,不翻菜单就完全看不见;
     /// 而空态是用户唯一「主动停在这里、手上没事」的时刻 —— 此刻给信息不打断任何人。
     /// 只列最有**发现价值**的几条(⌘0 连续滚动、⇧⌘G 网格、⌥⌘G 跳页这类:
     /// 不看到就想不起它存在);翻页/缩放那种「按两下就摸到」的刻意不占位置。

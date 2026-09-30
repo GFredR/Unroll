@@ -270,7 +270,14 @@ final class ReaderViewModel: ObservableObject {
 
     /// 菜单可用性:只有正在阅读一份真实文档时才谈得上检查它
     var canCheckIntegrity: Bool {
-        phase == .reading && document != nil && pageCount > 0
+        // 目录源没有"归档完整性"这回事(2026-09-28):⌥⌘V 验的是**归档条目**的
+        // 字节是否读得通(CRC / 截断),而散图目录里的每个文件都由文件系统保证。
+        // 留着它,点了也只是把每个文件白读一遍,却给出一个"检查过了"的错觉;
+        // 真正能回答"哪张图读不出来"的是缩略图网格(失败页本身就是那张卡片)。
+        // ⚠️ 灰掉而不是换文案:一个叫「检查归档完整性」的菜单项对目录生效,
+        //    用户没法从名字上知道它此刻在检查什么
+        guard phase == .reading, let document, pageCount > 0 else { return false }
+        return !document.isFolderSource
     }
 
     /// 开始检查(菜单命令入口)。重复触发 = 重新开始。
@@ -588,6 +595,12 @@ final class ReaderViewModel: ObservableObject {
     private var exportGeneration = 0
 
     /// 菜单可用性:只有正在阅读一份真实文档时才谈得上导出它的页
+    ///
+    /// **目录源照旧放行**(2026-09-28 定稿,与 `canCheckIntegrity` 刻意相反):
+    /// 「导出全部页」对散图目录是**完全说得通**的事 —— 把选中的这一层图片按页序
+    /// 另存到别处(命名规整成 0001.png …),正是用户会想要的;而完整性检查对目录
+    /// 则无事可做(见那里的注释)。两者问的其实不是同一件事:
+    /// 一个是「这个命令对目录有没有用」,一个是「这个命令对目录有没有意义」
     var canExportPages: Bool {
         phase == .reading && document != nil && pageCount > 0
     }
@@ -822,13 +835,23 @@ final class ReaderViewModel: ObservableObject {
                 didAutoShowHintBar = true
             }
 
-            // 续读键:文件名 + 文件大小(stat 放后台,不占主线程,AGENTS.md 十二.1)
-            let bytes = await fileSize(of: url)
-            documentKey = ReadingProgress.key(name: url.lastPathComponent, size: bytes)
+            // 身份量分两种(2026-09-28)。**目录不能用 fileSize**:那是目录的
+            // metadata 大小(APFS 上随条目增减而变),拿它当身份键的话,用户往里
+            // 加一张图,续读与书签就一起丢了 —— 而且丢得完全无声(下次打开从第一页
+            // 开始,看起来像"记忆没生效",查半天查不到这行)。改用**页数**:目录内容
+            // 变了本就该算另一本,这与"加一张图 = 内容不同"是同一件事。
+            // 归档侧照旧用字节数(stat 放后台,不占主线程,AGENTS.md 十二.1)
+            let sizeBytes = document.isFolderSource ? -1 : await fileSize(of: url)
+            let identity = Self.documentIdentity(isFolderSource: document.isFolderSource,
+                                                 fileSize: sizeBytes,
+                                                 pageCount: document.entries.count)
+            documentKey = ReadingProgress.key(name: url.lastPathComponent, size: identity)
 
-            // 面包屑:格式 + 大小桶(不含文件名)/ 页数 / 加密页数(§5.10.4 允许字段)
+            // 面包屑:格式 + 大小桶(不含文件名)/ 页数 / 加密页数(§5.10.4 允许字段)。
+            // 目录报 -1 ⇒ 桶是 sz_unknown —— 这是**准确**的,不是将就:
+            // 目录没有"文件大小"这个东西可言,编一个数出来才是错的
             Breadcrumbs.shared.record(.openArchive(format: Self.formatToken(document.format),
-                                                   sizeBucket: Breadcrumbs.sizeBucket(bytes: bytes)))
+                                                   sizeBucket: Breadcrumbs.sizeBucket(bytes: sizeBytes)))
             Breadcrumbs.shared.record(.indexBuilt(pages: document.entries.count))
             if encryptedPageCount > 0 {
                 Breadcrumbs.shared.record(.encryptedPages(count: encryptedPageCount))
@@ -1263,6 +1286,10 @@ final class ReaderViewModel: ObservableObject {
         case .sevenZip: return "7z"
         case .rar:      return "rar"
         case .tar:      return "tar"
+        // 目录源(2026-09-28)。与四个归档标量并列而不是合并到 "other":
+        // 面包屑里"这本是散图目录"与"库没认出格式"是两件不同的事,
+        // 前者是设计内的来源,后者才是异常
+        case .folder:   return "folder"
         case .other:    return "other"
         }
     }
@@ -1274,6 +1301,7 @@ final class ReaderViewModel: ObservableObject {
         case .corrupted:                return "corrupted"
         case .empty:                    return "empty"
         case .noImages:                 return "noImages"
+        case .subfoldersOnly:           return "subfoldersOnly"
         case .headerEncrypted:          return "headerEncrypted"
         case .encrypted:                return "encrypted"
         case .wrongPassphrase:          return "wrongPassphrase"
@@ -1288,6 +1316,18 @@ final class ReaderViewModel: ObservableObject {
         await Task.detached(priority: .utility) {
             (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? -1
         }.value
+    }
+
+    /// 续读键的身份量(2026-09-28)。**目录取页数、归档取字节数**。
+    ///
+    /// 抽成 static 纯函数是为了让它**能被直接断言** —— 这一段的价值全在
+    /// 「目录别用文件大小」这一句上,而这句话用端到端**测不出来**:同一个目录上,
+    /// 目录 metadata 大小与页数总是同向变化,于是无论实现取哪一个,
+    /// 「打开 → 翻页 → 重开 → 恢复」都会通过。又是一个「自洽的错值」
+    /// (同 MEMORY 里那条 `335+2` 与 `333+4` 都等于 337 的教训 —— 表面看不出错)。
+    /// 只有把 fileSize 与 pageCount 摆成**两个不同的数**,才能一眼看出取了谁。
+    static func documentIdentity(isFolderSource: Bool, fileSize: Int, pageCount: Int) -> Int {
+        isFolderSource ? pageCount : fileSize
     }
 
     /// 回写续读进度(仅在阅读态且有进度键时;失败静默 —— 续读绝不致命)
@@ -1474,17 +1514,42 @@ final class ReaderViewModel: ObservableObject {
     /// 必须区分(§5.9.1:7z 实测不支持,RAR 是推断)—— open 失败拿不到 libarchive
     /// 的 format 判定,按扩展名分流(用户视角等价)
     private func openFailure(for error: ArchiveError, url: URL) -> Failure {
+        // 目录与归档走**两套措辞**(2026-09-28)。判据是 URL 是不是目录 ——
+        // 这里拿不到 document(打开失败正是"没建起来"的那个情形)。
+        // ⚠️ 判据用库里的 `ArchiveDocument.isDirectory`(与"决定走哪条路"的是**同一个**
+        //    函数),不是图省事的 `url.hasDirectoryPath` —— 后者对**不带尾斜杠的真实目录**
+        //    答 false,而那种 URL 恰恰是拖拽 / 书签解析的常态:一个明明能打开的空目录,
+        //    会被讲成"无法打开这个归档"(2026-09-28 单测抓到的真缺陷)。
+        //    代价是一次同步 stat,只发生在失败路径上,可以忽略
+        let folder = ArchiveDocument.isDirectory(url)
         switch error {
         case .corrupted, .unknown:
-            return Failure(titleKey: "archive.corrupted.title",
-                           bodyKey: "archive.corrupted.body", bodyArg: nil)
+            return folder
+                ? Failure(titleKey: "archive.corrupted.folder.title",
+                          bodyKey: "archive.corrupted.folder.body", bodyArg: nil)
+                : Failure(titleKey: "archive.corrupted.title",
+                          bodyKey: "archive.corrupted.body", bodyArg: nil)
         case .empty:
-            // §5.9.3.1 未定义「0 条目」组,M2 补最小文案,M3 一并润色
-            return Failure(titleKey: "archive.empty.title",
-                           bodyKey: "archive.empty.body", bodyArg: nil)
+            // §5.9.3.1 未定义「0 条目」组,M2 补最小文案,M3 一并润色(目录版同批补)
+            return folder
+                ? Failure(titleKey: "archive.empty.folder.title",
+                          bodyKey: "archive.empty.folder.body", bodyArg: nil)
+                : Failure(titleKey: "archive.empty.title",
+                          bodyKey: "archive.empty.body", bodyArg: nil)
         case .noImages(let found):
-            return Failure(titleKey: "archive.noImages.title",
-                           bodyKey: "archive.noImages.body", bodyArg: found)
+            // 目录版那句要顺带回答"我明明选了漫画目录,为什么说没有图片" ——
+            // 因为子文件夹不进(不递归是刻意的),所以文案里必须说出来
+            return folder
+                ? Failure(titleKey: "archive.noImages.folder.title",
+                          bodyKey: "archive.noImages.folder.body", bodyArg: found)
+                : Failure(titleKey: "archive.noImages.title",
+                          bodyKey: "archive.noImages.body", bodyArg: found)
+        case .subfoldersOnly(let count):
+            // 只有目录源会抛这条(归档格式里没有"子目录"),不必像上面两条那样判 folder。
+            // 与「空的」分开的理由见 ArchiveError:一个说"这里什么都没有"、
+            // 一个说"这里有 N 个文件夹",给用户的下一步完全不同
+            return Failure(titleKey: "archive.subfolders.folder.title",
+                           bodyKey: "archive.subfolders.folder.body", bodyArg: count)
         case .headerEncrypted:
             return Failure(titleKey: "archive.encrypted.header.title",
                            bodyKey: "archive.encrypted.header.body", bodyArg: nil)
@@ -1514,7 +1579,7 @@ final class ReaderViewModel: ObservableObject {
             let readable = max(pageCount - encryptedPageCount, 0)
             return Failure(titleKey: "archive.page.encrypted.title",
                            bodyKey: "archive.page.encrypted.subtitle", bodyArg: readable)
-        case .corrupted, .unknown, .headerEncrypted, .empty, .noImages:
+        case .corrupted, .unknown, .headerEncrypted, .empty, .subfoldersOnly, .noImages:
             return Failure(titleKey: "archive.page.failed.title",
                            bodyKey: "archive.page.failed.body", bodyArg: nil)
         }

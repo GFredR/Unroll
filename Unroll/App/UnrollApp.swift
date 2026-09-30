@@ -120,6 +120,17 @@ struct UnrollApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                // 打开文件夹(2026-09-28):把一堆散图当一本读 —— 不建库、不解压、
+                // 不递归(理由见设计文档 §2.2)。⌥⌘O = 与 ⌘O **同一个字母**,
+                // 靠修饰键区分成一对("打开一个东西"的两种来源);而 ⌥⌘ 在本 App 里
+                // 已经稳定表示"这一组的第二个入口"(⌥⌘C 封面 / ⌥⌘V 检查 / ⌥⌘G 跳页)
+                Button(L10n.tr("app.menu.openFolder")) {
+                    if let url = ArchivePicker.pickFolder() {
+                        openArchive(url: url)
+                    }
+                }
+                .keyboardShortcut("o", modifiers: [.command, .option])
             }
 
             // v2(2026-09-16):「另存当前页…」与「在访达中显示」。
@@ -717,6 +728,26 @@ enum ArchivePicker {
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = allowedTypes.compactMap { UTType($0) }
+        guard panel.runModal() == .OK else { return nil }
+        return panel.url
+    }
+
+    /// 选一个**文件夹**(散图目录当一本读,2026-09-28)。
+    ///
+    /// 为什么另开一个面板,而不是给 `pick()` 拧开 `canChooseDirectories`:
+    /// 那个面板的 `allowedContentTypes` 是"四种归档 + 裸 zip/rar/7z",把目录混进去
+    /// 之后,用户面对的是一个"有些东西能选、有些不能,而面板不说为什么"的选择器 ——
+    /// 而这两个入口要的东西本来就不是一类(一个文件 vs 一个目录)。分开之后,
+    /// 菜单上就是两句各自说清一件事的话。
+    ///
+    /// `allowedContentTypes = [.folder]`:**别去赌**"目录不受 content-type 过滤影响"
+    /// 那条未经验证的规则 —— 直接声明"我要的就是文件夹",面板自己会把文件灰掉
+    static func pickFolder() -> URL? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.folder]
         guard panel.runModal() == .OK else { return nil }
         return panel.url
     }
