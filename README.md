@@ -5,7 +5,7 @@
 
 # Unroll / 开卷
 
-A lightweight, native **macOS comic archive reader**. Double-click a `.cbz / .cbr / .cb7 / .cbt` file and start reading — no extraction, no library, no traces left behind. **Fully open source and free.**
+A lightweight, native **macOS comic archive reader**. Double-click a `.cbz / .cbr / .cb7 / .cbt` file — or hand it a folder full of images — and start reading: no extraction, no library, no traces left behind. **Fully open source and free.**
 
 Reading a comic shouldn't require unpacking it first. Most archive tools make you extract to a temp folder, then open an image viewer, and then clean up afterwards — for a 500 MB archive that's half a gigabyte of disk churn just to read page 1. Unroll streams pages straight out of the archive instead.
 
@@ -18,6 +18,7 @@ Reading a comic shouldn't require unpacking it first. Most archive tools make yo
 ## Features
 
 - **Reads straight from the archive** — nothing is ever extracted to disk, no thumbnail database is built, no "library" is imported. Open a file, read it, quit.
+- **A folder of loose images reads like a book too** (`⌥⌘O`) — extracted chapters, camera exports, anything that never made it into an archive. Folders and archives go through **one opening path**, so drag-and-drop, Finder, the open panel and Recents all treat them the same. Only the **top level** of the folder is read (recursing into subfolders is the shelf feature, not this one); a subfolder can never sneak in as a "page", and a folder whose whole top level is subfolders tells you **how many** instead of calling itself empty. Resume and bookmarks key a folder by **page count** — a folder's own size changes the moment you add an image, which would silently drop both. Integrity checking (`⌥⌘V`) is disabled for folders, since there are no archive entries to verify, while export (`⇧⌘E`) still works: renaming this level's images into reading order is genuinely useful on a folder.
 - **Archives that hold more than images** — a `ComicInfo.xml`, a `readme`, macOS `__MACOSX` packing junk and `thumbs/` thumbnails can all sit next to the pages. Non-image entries are dropped silently and page numbering starts at the first real image. Entries named in a way that is plainly another format (`.txt`, `.xml`, `.pdf`) are left out too — but **a page with no extension at all is kept** (old scan packs name them `001`, `002`): the page's own bytes decide, not its name, so such an archive opens rather than being reported as containing no images. A page that still turns out not to be an image degrades to a single failed-page card; the rest of the archive is unaffected.
 - **Zero third-party dependencies** — it uses the `libarchive` (BSD-2) that already ships with macOS. The whole app is about 2.4 MB: a 1.75 MB main binary plus 564 KB for the two Finder extensions.
 - **A single sequential scanner** — pages are pulled through one streaming pass, so page 200 costs about the same as page 1. The naive alternative (reopening the archive per page) degrades quadratically on solid 7z archives: measured **71× slower** at 150 pages, and getting worse as the archive grows.
@@ -70,6 +71,7 @@ The number worth reading twice is the one behind the sequential scanner. Reopeni
 | `.cbr` | RAR 4 (older archives) | ⚠️ untested — no sample on hand; `libarchive` supports RAR 4, so it should work, but it has not been confirmed |
 | any | encrypted | ✅ detected; **ZIP (ZipCrypto / AES-256) and RAR can be unlocked with a password**; encrypted 7z can't be decrypted by the system library, and says so |
 | any | header-encrypted | ⚠️ even the file listing is encrypted, so nothing can be read — explained honestly, with a next step |
+| any | a folder of images | ✅ read directly — **top level only**, no recursion; not a file association, so reach it with `⌥⌘O`, drag-and-drop, or the open panel |
 
 When an archive holds no images, or the file is damaged or isn't an archive at all, you get a specific message rather than an empty window.
 
@@ -113,7 +115,7 @@ shasum -a 256 -c Unroll-<version>.dmg.sha256        # 1. the file is intact
 
 Compare the commit it prints with the repository. This works the same way for the installed copy: `PlistBuddy` against `/Applications/Unroll.app/Contents/Info.plist`.
 
-Once installed, `.cbz / .cbr / .cb7 / .cbt` files open in Unroll on double-click. Plain `.zip` is only offered inside the Open panel — Unroll never takes over the system's default handler for ZIP.
+Once installed, `.cbz / .cbr / .cb7 / .cbt` files open in Unroll on double-click. Plain `.zip` is only offered inside the Open panel — Unroll never takes over the system's default handler for ZIP. A folder cannot be a file association, so folders are reached with `⌥⌘O`, drag-and-drop, or the open panel.
 
 The two Quick Look extensions live inside the app bundle and are picked up automatically once `Unroll.app` is in **Applications**. If pressing `Space` still shows a generic icon instead of a cover, open **System Settings → General → Login Items & Extensions → Quick Look** and make sure Unroll is switched on. To diagnose it stage by stage, run:
 
@@ -153,6 +155,7 @@ Both scripts write outside the repository on purpose — keeping `.app`, `.dmg` 
 | Shortcut | Action |
 | --- | --- |
 | `⌘O` | Open… |
+| `⌥⌘O` | Open Folder… — read a folder of loose images as one book |
 | `⌘1` / `⌘2` | Single page / two-page spread |
 | `⌘0` | Continuous scroll — one vertical column, page after page |
 | `⌥⌘C` | Cover on its own page (spread pairing) |
