@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.3.0 — 2026-09-30 · 打开文件夹：一堆散图现在也能当一本读（顺带修掉「只有子文件夹」被说成「空的」）/ Open a folder: a pile of loose images now reads like a book
+
+> 本版加**一个新入口**和**一条口径修正**。入口是「打开文件夹」—— 散图（解压出来的、网盘同步下来的、相机导出的）
+> 此前在开卷里**根本打不开**；现在它和归档走同一条打开链路。口径修正是附带发现的一句**假话**：一个「这一层
+> 全是 `vol01/`、`vol02/` 子文件夹」的目录，此前会被告知**「这个文件夹是空的」** —— 而它一点都不空。
+> 那句话不会让人去展开子文件夹，只会让人去确认文件是不是没下载完。
+
+**中文**
+- **新增：把一个装满图片的文件夹当一本读**（`⌥⌘O`；直接拖进来、在访达里双击、从「最近打开」进，也都行）。目录与归档走**同一条打开链路** —— `ArchiveDocument.open` 内部按 URL 是不是目录分流，于是拖拽 / `onOpenURL` / 打开面板 / 最近打开**四条入口都不需要各自知道这件事**，也就不存在"某条入口忘了处理目录"的缺口
+- **不递归是刻意的，而且用结构锁住而不是靠注释**：只读所选文件夹的**这一层**（设计文档 §2.2 把「递归浏览」列为书架，仍然不做）。⚠️ 只靠"是不是图片"来过滤**不够** —— 一个**没有点号**的子目录名（`vol01`）会命中"无扩展名按内容认"那条规则，于是子目录**自己**变成第 0 页。真正挡住它的是"必须是常规文件"这一步
+- **页面读取用 `Data(contentsOf:)` 而不是映射**：映射式读取在文件被删掉之后会 `SIGBUS`（整个 App 挂掉），而"读着读着把文件挪走"在散图目录里并不罕见
+- **续读与书签对目录取「页数」，不取「目录大小」**：目录的 metadata 大小在 APFS 上会随条目增减而变，拿它当身份量的话 —— **往目录里加一张图，续读和书签会一起丢，而且丢得完全无声**
+- **「检查归档完整性」（`⌥⌘V`）对目录灰掉**：它验的是归档条目的字节（CRC / 截断），散图目录里每个文件由文件系统保证；留着它，点了只是白读一遍却给出「检查过了」的错觉。**导出（`⇧⌘E`）刻意相反、照旧放行** —— 这两件事问的不是同一个问题：导出问「对目录有没有**用**」（有：把这一层图片按页序规整搬走），完整性检查问「有没有**意义**」（没有）
+- **修正：一个"整层都是子文件夹"的目录，此前被说成「这个文件夹是空的」** —— 它一点都不空。现在它会说「**这个文件夹里只有子文件夹**」，报出**子文件夹的个数**，并给出下一步（改选具体那一话）。同一种用户困境，`noImages` 那条文案一直在指路，`empty` 这条不指
+- 测试：ArchiveKit **+14**（`FolderSourceTests`：自然排序 / 过滤 / **不递归的结构锁** / 字节直通 / 单页失败不扩散 / 取消 / 报告子文件夹个数 / 与 `noImages` 的边界），App 宿主 **+11**（入口通路 / 三套目录文案 / 完整性检查灰掉 / 续读键取页数 / 导出仍放行 / 只有子文件夹时不说"空"）
+- 计数：**383 用例 / 380 通过 / 3 skip / 0 失败**（ArchiveKit 78 → 92，App 宿主 263 → 274；3 个 skip 与上一版相同，都是 opt-in 的基准与外部样本）
+
+**English**
+- **New: a folder full of images opens as a book** (`⌥⌘O`, or drag one in, double-click it in Finder, or pick it from Recents). Folders and archives share **one opening path** — `ArchiveDocument.open` splits internally on whether the URL is a directory, so drag-and-drop, `onOpenURL`, the open panel and Recents **all get it for free**, and there is no entry point that can forget to handle a folder.
+- **Not recursing is deliberate, and it is locked by structure rather than by a comment**: only the **top level** of the chosen folder is read (the design doc lists recursive browsing as a shelf, still not built). ⚠️ Filtering by "is it an image" alone is **not enough** — a subfolder whose name has **no dot** (`vol01`) matches the "extensionless files are judged by content" rule, so the subfolder **itself** becomes page 0. What actually stops it is the "must be a regular file" step.
+- **Pages are read with `Data(contentsOf:)`, not a mapping**: a mapped read raises `SIGBUS` (taking the whole app down) if the file is deleted underneath it, and "moved the file while I was reading" is not rare in a folder of loose images.
+- **Resume and bookmarks key folders by page count, not by folder size**: a directory's metadata size changes on APFS as entries come and go, and using it as the identity would mean **adding one image silently drops both the resume position and the bookmarks**.
+- **"Check Archive Integrity" (`⌥⌘V`) is greyed out for folders**: it verifies the bytes of archive entries (CRC / truncation), whereas every file in a folder is guaranteed by the filesystem. Leaving it enabled would read everything for nothing and imply the folder had been checked. **Export (`⇧⌘E`) deliberately stays enabled** — the two ask different questions: export asks whether it is **useful** for a folder (it is: files get renamed into reading order and copied out), integrity asks whether it is **meaningful** (it is not).
+- **Fixed: a folder whose entire top level is subfolders used to be reported as "This folder is empty"** — it is not empty at all. It now says "**This folder only contains subfolders**", reports **how many**, and points at the next step (pick the specific chapter). The `noImages` copy has always pointed the way; the `empty` copy did not.
+- Tests: ArchiveKit **+14** (`FolderSourceTests`: natural sort, filtering, **the structural lock against recursion**, byte pass-through, a single page failing alone, cancellation, reporting the subfolder count, and the boundary against `noImages`), app-hosted **+11** (the entry path, all three folder copy sets, integrity disabled, resume keyed by page count, export still allowed, and not calling a subfolder-only directory "empty").
+- Counts: **383 cases / 380 passing / 3 skipped / 0 failures** (ArchiveKit 78 → 92, app-hosted 263 → 274; the three skips are the same opt-in benchmarks and external sample as before).
+
 ## 1.2.2 — 2026-09-28 · 关掉最后一个窗口 = 结束会话（修掉四处早已写下、却一句都不成立的声明）/ Closing the last window now ends the session
 
 > 本版只有**一处行为变更**，加两处连带修正。它落在这个版本里有一个具体原因：修复之前，`AppLifecycle` 的注释、
