@@ -23,7 +23,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
 REPO="GFredR/Unroll"
-REPO_DESC="A native macOS reader for CBZ / CBR / CB7 / CBT archives — no unzip, no library, no extraction. Double-click and read."
+REPO_DESC="A native macOS reader for CBZ / CBR / CB7 / CBT archives — or just a folder of images. No unzip, no library, no extraction. Double-click and read."
 TOPICS=(macos swift swiftui macos-app comic-reader cbz cbr manga archive-reader quicklook libarchive)
 
 GO=0
