@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Unroll · macOS 漫画归档阅读器</title>
+<meta name="description" content="原生 macOS 漫画归档阅读器：双击打开 cbz/cbr/cb7/cbt 或一个散图文件夹，不解压、不建图库。">
+<style>
+  :root {
+    --bg: #ffffff; --card: #f6f7f9; --line: #e2e5ea;
+    --fg: #1a1d21; --dim: #5b6570; --accent: #378ADD; --accent-fg: #0d1114;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --card: #1e2227; --line: #2f353c;
+      --fg: #e8ebee; --dim: #a3adb8; --accent: #85b7eb; --accent-fg: #0d1114;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 20px 64px;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
+  }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 34px; margin: 40px 0 6px; font-weight: 600; letter-spacing: -0.02em; }
+  h2 { font-size: 21px; margin: 48px 0 14px; font-weight: 600; }
+  p  { color: var(--dim); margin: 10px 0; }
+  .lede { font-size: 18px; color: var(--fg); max-width: 62ch; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
+         background: var(--card); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; color: var(--fg); }
+  .lang { float: right; margin-top: 14px; }
+  .lang button { background: var(--card); color: var(--dim); border: 1px solid var(--line);
+                  border-radius: 6px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+  .lang button[aria-pressed="true"] { color: var(--fg); border-color: var(--accent); }
+  .cta { margin: 26px 0 8px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .btn { display: inline-block; padding: 11px 20px; border-radius: 8px; text-decoration: none;
+         font-size: 15px; font-weight: 500; border: 1px solid var(--line); color: var(--fg); background: var(--card); }
+  .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+  figure { margin: 0; }
+  /* demo.gif 是竖屏录屏，不限宽的话两侧会留出很宽的黑边 */
+  .hero-shot { max-width: 620px; margin: 0 auto; }
+  .shot { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+  figcaption { color: var(--dim); font-size: 13px; margin-top: 8px; text-align: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; }
+  .feat { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; }
+  .feat b { display: block; margin-bottom: 4px; font-weight: 600; }
+  .feat span { color: var(--dim); font-size: 14.5px; }
+  .nums { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 14px; }
+  .num { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; text-align: center; }
+  .num i { display: block; font-style: normal; font-size: 22px; font-weight: 600; color: var(--accent); }
+  .num span { color: var(--dim); font-size: 13px; }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+  footer a { color: var(--accent); }
+  [data-lang] { display: none; }
+  /* ⚠️ 不要在这里加类似 `h1 .t { display: inline }` 的"保险"规则：
+     特异性 (0,2,0) 会压过上面 [data-lang]{display:none} 的 (0,1,0)，
+     导致非当前语言的元素照样显示。span 默认已是 inline，无需声明。 */
+  html[lang="zh-CN"] [data-lang="zh"], html[lang="en"] [data-lang="en"] { display: inline; }
+</style>
+</head>
+<body>
+<main>
+  <div class="lang" role="group" aria-label="Language">
+    <button id="btn-zh" aria-pressed="true">中文</button>
+    <button id="btn-en" aria-pressed="false">English</button>
+  </div>
+
+  <h1>
+    <span class="t" data-lang="zh">开卷 Unroll</span>
+    <span class="t" data-lang="en">Unroll</span>
+  </h1>
+
+  <p class="lede">
+    <span data-lang="zh">macOS 原生漫画归档阅读器。双击 <code>.cbz / .cbr / .cb7 / .cbt</code>，或者直接丢一个装满图片的文件夹进去就能看——不解压、不建图库、不留痕迹。</span>
+    <span data-lang="en">A native macOS comic reader. Double-click a <code>.cbz / .cbr / .cb7 / .cbt</code> archive, or point it at a folder of images. No unzip, no library, no leftovers.</span>
+  </p>
+
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/GFredR/Unroll/releases/latest" rel="noopener">
+      <span data-lang="zh">下载最新版</span><span data-lang="en">Download latest</span>
+    </a>
+    <a class="btn" href="https://github.com/GFredR/Unroll" rel="noopener">
+      <span data-lang="zh">查看源码</span><span data-lang="en">Source code</span>
+    </a>
+  </div>
+
+  <h2>
+    <span data-lang="zh">直接看</span><span data-lang="en">Watch it work</span>
+  </h2>
+  <figure class="hero-shot">
+    <img class="shot" src="demo.gif" alt="Unroll demo: cover → single page → two-page spread" width="900">
+    <figcaption>
+      <span data-lang="zh">封面 → 单页 → 双页跨页，全程从归档里直接流式读取</span>
+      <span data-lang="en">Cover → single page → two-page spread, streamed straight out of the archive</span>
+    </figcaption>
+  </figure>
+
+  <h2>
+    <span data-lang="zh">它解决什么</span><span data-lang="en">Why it exists</span>
+  </h2>
+  <div class="grid">
+    <div class="feat">
+      <b><span data-lang="zh">不解压</span><span data-lang="en">Never extracts</span></b>
+      <span data-lang="zh">大多数工具要先解到临时文件夹再打开。500 MB 的档只为读第 1 页就先写半个 G。</span>
+      <span data-lang="en">Most tools unpack to a temp folder first. A 500 MB archive writes half a gigabyte just to read page 1.</span>
+    </div>
+    <div class="feat">
+      <b><span data-lang="zh">单次顺序扫描</span><span data-lang="en">Single sequential pass</span></b>
+      <span data-lang="zh">第 200 页和第 1 页一样快。逐页重开的写法在 solid 7z 上会退化到 O(n²)——实测 150 页慢 71 倍。</span>
+      <span data-lang="en">Page 200 costs the same as page 1. Reopening per page degrades to O(n²) on solid 7z — measured 71× slower at 150 pages.</span>
+    </div>
+    <div class="feat">
+      <b><span data-lang="zh">像素级内存预算</span><span data-lang="en">Pixel-budgeted cache</span></b>
+      <span data-lang="zh">最多 8 张全分辨率 + 200 M 像素。被淘汰的页降级成缩略图而非直接扔掉，往回翻是瞬时的。</span>
+      <span data-lang="en">At most 8 full-resolution pages and 200 M pixels. Evicted pages are demoted to a thumbnail, not dropped — scrubbing back is instant.</span>
+    </div>
+    <div class="feat">
+      <b><span data-lang="zh">加密档</span><span data-lang="en">Encrypted archives</span></b>
+      <span data-lang="zh">zip / rar 加密档会直接问密码；密码只驻留内存，不写盘、不记住、不进崩溃报告。</span>
+      <span data-lang="en">Encrypted zip/rar prompts for a password. It lives in memory only — never written to disk, remembered, or logged.</span>
+    </div>
+    <div class="feat">
+      <b><span data-lang="zh">Quick Look 集成</span><span data-lang="en">Quick Look</span></b>
+      <span data-lang="zh">Finder 里按空格看封面和页数，文件图标就是封面本身（两个扩展：缩略图 + 预览）。</span>
+      <span data-lang="en">Press Space in Finder to see the cover and page count; the file icon is the real cover too. Two bundled extensions.</span>
+    </div>
+    <div class="feat">
+      <b><span data-lang="zh">完整性检查</span><span data-lang="en">Integrity check</span></b>
+      <span data-lang="zh">只读字节、不解码，坏页直接点名第几页——而不是让你自己一页页读出来发现。</span>
+      <span data-lang="en">Read-only, no decode pass, and it names the page numbers that fail instead of leaving you to find them.</span>
+    </div>
+  </div>
+
+  <h2>
+    <span data-lang="zh">界面</span><span data-lang="en">Interface</span>
+  </h2>
+  <div class="grid">
+    <figure>
+      <img class="shot" src="shot-reader-window.png" alt="Reader window" loading="lazy" width="900">
+      <figcaption><span data-lang="zh">阅读器：HUD 显示文件名与页码</span><span data-lang="en">Reader with filename and page in the HUD</span></figcaption>
+    </figure>
+    <figure>
+      <img class="shot" src="shot-grid-panel.png" alt="Thumbnail grid" loading="lazy" width="900">
+      <figcaption><span data-lang="zh">缩略图网格：打开即整本可见</span><span data-lang="en">Thumbnail grid — the whole volume on open</span></figcaption>
+    </figure>
+    <figure>
+      <img class="shot" src="shot-encrypted.png" alt="Password prompt" loading="lazy" width="900">
+      <figcaption><span data-lang="zh">加密档：问密码，而不是直接失败</span><span data-lang="en">Encrypted archives: asked for a password, not a dead end</span></figcaption>
+    </figure>
+    <figure>
+      <img class="shot" src="shot-export-panel.png" alt="Export panel" loading="lazy" width="900">
+      <figcaption><span data-lang="zh">导出全部页面：原始字节直通，不重编码</span><span data-lang="en">Export every page — original bytes passed through</span></figcaption>
+    </figure>
+  </div>
+
+  <h2>
+    <span data-lang="zh">实测数字</span><span data-lang="en">Measured</span>
+  </h2>
+  <div class="nums">
+    <div class="num"><i>2.6 MB</i><span data-lang="zh">App 体积</span><span data-lang="en">App size</span></div>
+    <div class="num"><i>0</i><span data-lang="zh">第三方依赖</span><span data-lang="en">Third-party deps</span></div>
+    <div class="num"><i>0.15 GB</i><span data-lang="zh">200 页峰值内存</span><span data-lang="en">Peak, 200 pages</span></div>
+    <div class="num"><i>71×</i><span data-lang="zh">优于逐页重开</span><span data-lang="en">vs. reopen-per-page</span></div>
+    <div class="num"><i>0</i><span data-lang="zh">网络权限</span><span data-lang="en">Network entitlement</span></div>
+  </div>
+
+  <h2>
+    <span data-lang="zh">要求</span><span data-lang="en">Requirements</span>
+  </h2>
+  <p>
+    <span data-lang="zh">macOS 14 Sonoma 及以上。免费、开源（MIT），无需账号、无需联网。</span>
+    <span data-lang="en">macOS 14 Sonoma or later. Free and MIT-licensed — no account, no network required.</span>
+  </p>
+
+  <footer>
+    <span data-lang="zh">未做 Apple Developer 签名与公证，首次打开需在「系统设置 → 隐私与安全性」点「仍要打开」。安装包是 ad-hoc 签名，README 里有 sha256 校验步骤。</span>
+    <span data-lang="en">Ad-hoc signed and not notarized — allow it once in System Settings → Privacy &amp; Security. Each release ships a sha256 sidecar; the README shows how to verify it.</span>
+    <br>
+    <a href="https://github.com/GFredR/Unroll">github.com/GFredR/Unroll</a>
+    ·
+    <a href="https://github.com/GFredR/Unroll/discussions" rel="noopener"><span data-lang="zh">讨论</span><span data-lang="en">Discussions</span></a>
+  </footer>
+</main>
+
+<script>
+(function () {
+  var root = document.documentElement;
+  function set(l) {
+    root.setAttribute('lang', l);
+    document.title = l === 'zh' ? '开卷 Unroll · macOS 漫画归档阅读器' : 'Unroll · native macOS comic reader';
+    document.getElementById('btn-zh').setAttribute('aria-pressed', String(l === 'zh'));
+    document.getElementById('btn-en').setAttribute('aria-pressed', String(l === 'en'));
+  }
+  document.getElementById('btn-zh').addEventListener('click', function () { set('zh'); });
+  document.getElementById('btn-en').addEventListener('click', function () { set('en'); });
+})();
+</script>
+</body>
+</html>
