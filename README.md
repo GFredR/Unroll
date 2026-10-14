@@ -236,6 +236,13 @@ Unroll is **fully open source and free.** If it saved you some time or a subscri
 
 ![WeChat Pay QR code](assets/donate-wechat.png)
 
+## Community
+
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Contributing](CONTRIBUTING.md)
+- [Accessibility](ACCESSIBILITY.md)
+- [Security Policy](SECURITY.md)
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Use, modify, and redistribute freely, for personal or commercial projects.

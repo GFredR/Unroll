@@ -237,6 +237,13 @@ Unroll/
 
 ![微信收款码](assets/donate-wechat.png)
 
+## 社区
+
+- [行为准则](CODE_OF_CONDUCT.md)
+- [参与贡献](CONTRIBUTING.md)
+- [无障碍支持](ACCESSIBILITY.md)
+- [安全策略](SECURITY.md)
+
 ## 许可
 
 MIT——见 [LICENSE](LICENSE)。可自由使用、修改与再分发，个人或商业项目均可。
